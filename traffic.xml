@@ -1,14 +1,14 @@
 <config> 
 	<source node="1">
-    <destination node="1" traffic="21" />
-    <destination node="2" traffic="15" />
+    <destination node="1" traffic="22" />
+    <destination node="2" traffic="14" />
     <destination node="3" traffic="15" />
-    <destination node="4" traffic="14" />
+    <destination node="4" traffic="15" />
     <destination node="5" traffic="8" />
  	</source>
   <source node="2">
-    <destination node="1" traffic="15" />
-    <destination node="2" traffic="34" />
+    <destination node="1" traffic="14" />
+    <destination node="2" traffic="33" />
     <destination node="3" traffic="17" />
     <destination node="4" traffic="13" />
     <destination node="5" traffic="6" />
@@ -16,14 +16,14 @@
   <source node="3">
     <destination node="1" traffic="15" />
     <destination node="2" traffic="17" />
-    <destination node="3" traffic="14" />
-    <destination node="4" traffic="11" />
+    <destination node="3" traffic="15" />
+    <destination node="4" traffic="12" />
     <destination node="5" traffic="7" />
  	</source>
   <source node="4">
-    <destination node="1" traffic="14" />
+    <destination node="1" traffic="15" />
     <destination node="2" traffic="13" />
-    <destination node="3" traffic="11" />
+    <destination node="3" traffic="12" />
     <destination node="4" traffic="16" />
     <destination node="5" traffic="5" />
  	</source>

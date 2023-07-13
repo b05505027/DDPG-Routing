@@ -353,7 +353,6 @@ class DDPGAgent:
 
                         print(scores)
                         print(scores_uniform)
-                        input()
 
             # if training is ready
             if (
@@ -451,10 +450,6 @@ class DDPGAgent:
         plt.savefig(f"./experiments/{self.session_name}/plot.png")
 
 if __name__ == "__main__":
-
-    
-
-
     for actor_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
         for critic_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
             for period in [5, 10, 20, 30, 40, 50, 100, 150]:
@@ -462,13 +457,13 @@ if __name__ == "__main__":
                 session_name = str(int(time.time()))[4:] + "_" + names.get_full_name()
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
-                    "s_dim": 25,
+                    "s_dim": 7,
                     "a_dim": 7,
                     "buffers_size": 2048,
                     "sample_size": 32,
                     "gamma": 0.99,
                     "eps": 0.987,
-                    "initial_random_steps": 0,#64 + period * 20,
+                    "initial_random_steps": 64,#64 + period * 20,
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,

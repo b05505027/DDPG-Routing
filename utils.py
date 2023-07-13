@@ -87,17 +87,14 @@ class Simulation:
                 for k in range(len(path)-1):
                     self.G.edges[path[k], path[k+1]]['traffic'] += traffic_matrix[i, j]
 
-        new_state = np.ones((self.num_nodes,self.num_nodes), dtype=float)
-        new_state = new_state * -2
-        for edge in self.G.edges.data():
-            new_state[edge[0]-1, edge[1]-1] = self.quantize_traffic(edge[2]['traffic'])
-            new_state[edge[1]-1, edge[0]-1] = self.quantize_traffic(edge[2]['traffic'])
+        new_state = np.zeros(7, dtype=float)
+        for i, edge in enumerate(self.G.edges.data()):
+            new_state[i] = self.quantize_traffic(edge[2]['traffic'])
+            self.quantize_traffic(edge[2]['traffic'])
+        new_state = new_state.reshape(1, -1)
         return new_state
 
 
-
-
-        
     def rebuild_graph(self):
         nx.set_edge_attributes(self.G, 0, 'traffic')
         nx.set_edge_attributes(self.G, 0, 'weight')
@@ -105,7 +102,6 @@ class Simulation:
     def step(self, action, next_traffic = False):
         weights = self.action_transform(action)
         self.set_weights(weights)
-        #print("current traffic: ", self.current_traffic)
         self.set_traffic(self.current_traffic)
         self.run_simulation()
         delay = self.analyze_qos()
@@ -113,6 +109,9 @@ class Simulation:
 
         # renew states
         if next_traffic:
+            # if we choose to use the next traffic, weights are initialized to None
+            # to generate the next traffic. Otherwise, we use the current weights.
+            weights = None
             self.current_traffic = self.new_traffic
             self.new_traffic = self.generate_traffic()
             if self.periodic_index % self.period == 2:
