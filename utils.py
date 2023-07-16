@@ -104,8 +104,12 @@ class Simulation:
         self.set_weights(weights)
         self.set_traffic(self.current_traffic)
         self.run_simulation()
-        delay = self.analyze_qos()
-        reward = self.delay_reward(delay)
+        delay, lossrate = self.analyze_qos()
+
+        # print('delay_reward:', self.delay_reward(delay))
+        # print('lossrate_reward:', self.lossrate_reward(lossrate))
+        # input()
+        reward = self.delay_reward(delay) + 0*self.lossrate_reward(lossrate)
 
         # renew states
         if next_traffic:
@@ -162,7 +166,9 @@ class Simulation:
 
     
         
-
+    # lossrate reward functino
+    def lossrate_reward(self, lossrate):
+        return -100*lossrate
 
     # delay reward function
     def delay_reward(self, delay):
@@ -218,10 +224,16 @@ class Simulation:
     # analyze qos
     def analyze_qos(self):
         os.chdir(config["simulation_path"])
-        # read statistics.csv
-        cmd = " ".join(["opp_scavetool", "export", "-o", "statistics.csv", "./results/*.vec"])
+        # create vectors.csv
+        cmd = " ".join(["opp_scavetool", "export", "-o", "vectors.csv", "./results/*.vec"])
         process = subprocess.run(cmd, shell=True, capture_output=True)
-        df = pd.read_csv("statistics.csv")[['attrname','module', 'name','vecvalue']]
+
+        # create scalars.csv
+        cmd = " ".join(["opp_scavetool", "export", "-o", "scalars.csv", "./results/*.sca"])
+        process = subprocess.run(cmd, shell=True, capture_output=True)
+
+        # analyze vectors.csv
+        df = pd.read_csv("vectors.csv")[['attrname','module', 'name','vecvalue']]
         df = df.query("name=='endToEndDelay:vector' & vecvalue.notna()")
         data = df.to_dict('records')
         app_delays = []
@@ -237,9 +249,40 @@ class Simulation:
             else:
                 app_delays.append(mean)
         avg_delay = np.mean(app_delays)
-        #print(f'Average end-to-end delay: {avg_delay}s')
+    
+        # analyze scalars.csv
+        '''['run', 'type', 'module', 'name', 'attrname', 'attrvalue', 'value',
+       'count', 'sumweights', 'mean', 'stddev', 'min', 'max', 'underflows',
+       'overflows', 'binedges', 'binvalues']'''
+        df = pd.read_csv("scalars.csv")[['module', 'name','value']]
+        df_total = df.query("name=='incomingPackets:count' & value.notna()")
+        df_lost = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
+   
+
+        
+        data_total = df_total.to_dict('records')
+        data_lost = df_lost.to_dict('records')
+
+        data = list(zip(data_total, data_lost))
+        loss_rates = []
+        for scalar in data:
+            total_packets = int(scalar[0]['value'])
+            lost_packets = int(scalar[1]['value'])
+            # print('total_packets', total_packets)
+            # print('lost_packets', lost_packets)
+            if total_packets != 0:
+                loss_rates.append(lost_packets / total_packets)
+            else:
+                continue
+        
+        assert len(loss_rates)!= 0 # must be at least one loss rate
+
+        avg_lossrate = np.mean(loss_rates)
+
+
+
         os.chdir(config['project_path'])
-        return avg_delay
+        return avg_delay, avg_lossrate
 
 
     # setting link weights
