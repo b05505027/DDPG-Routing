@@ -325,7 +325,7 @@ class DDPGAgent:
                     else:
                         next_traffic = False
                 
-                    if self.total_step <= 1 and ministep == 0:
+                    if self.total_step <= 5 and ministep == 0:
                         next_state, reward, done, reward_uniform = self.step(action, require_uniform=True, next_traffic=False)
                         reward_uniform = reward_uniform * (1 - np.power(self.gamma,3))/(1-self.gamma)
                         score_uniform = reward_uniform + self.gamma * score_uniform
@@ -342,13 +342,14 @@ class DDPGAgent:
                     print('score', score)
                     print('score_uniform', score_uniform)
                     print('done', done)
+                    print('length of scores_uniform', len(scores_uniform))
 
                     # if episode ends
                     if done:         
                         # state = self.env.get_current_state()
                         scores.append(score)
 
-                        if self.total_step == 1:
+                        if self.total_step <= 5:
                             scores_uniform.append(score_uniform)
 
                         print(scores)
@@ -464,7 +465,7 @@ if __name__ == "__main__":
                     "gamma": 0.99,
                     "eps": 0.987,
                     "initial_random_steps": 64,#64 + period * 20,
-                    "total_traffic": 300,
+                    "total_traffic": 500,
                     "period": period,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,

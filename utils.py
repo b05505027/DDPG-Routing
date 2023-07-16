@@ -106,10 +106,10 @@ class Simulation:
         self.run_simulation()
         delay, lossrate = self.analyze_qos()
 
-        # print('delay_reward:', self.delay_reward(delay))
-        # print('lossrate_reward:', self.lossrate_reward(lossrate))
+        print('delay_reward:', self.delay_reward(delay))
+        print('lossrate_reward:', 0.2*self.lossrate_reward(lossrate))
         # input()
-        reward = self.delay_reward(delay) + 0*self.lossrate_reward(lossrate)
+        reward = self.delay_reward(delay) + 0.2*self.lossrate_reward(lossrate)
 
         # renew states
         if next_traffic:
@@ -258,7 +258,6 @@ class Simulation:
         df_total = df.query("name=='incomingPackets:count' & value.notna()")
         df_lost = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
    
-
         
         data_total = df_total.to_dict('records')
         data_lost = df_lost.to_dict('records')
