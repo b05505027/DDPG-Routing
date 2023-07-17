@@ -312,6 +312,10 @@ class DDPGAgent:
 
             score = 0
             score_uniform = 0
+
+            if self.total_step == 500:
+                self.env.broken_links = [0,1]
+
             for timestep in range(self.period):
                 for ministep in range(3): # 3 mini steps in one episode
 
@@ -339,10 +343,11 @@ class DDPGAgent:
                 
                     print('reward', reward)
                     print('reward uniform', reward_uniform)
-                    print('score', score)
-                    print('score_uniform', score_uniform)
-                    print('done', done)
-                    print('length of scores_uniform', len(scores_uniform))
+                    # print('score', score)
+                    # print('score_uniform', score_uniform)
+                    print('broken links', self.env.broken_links)
+                    #print('done', done)
+                    #print('length of scores_uniform', len(scores_uniform))
 
                     # if episode ends
                     if done:         
@@ -352,8 +357,8 @@ class DDPGAgent:
                         if self.total_step <= 5:
                             scores_uniform.append(score_uniform)
 
-                        print(scores)
-                        print(scores_uniform)
+                        #print(scores)
+                        #print(scores_uniform)
 
             # if training is ready
             if (
@@ -463,8 +468,8 @@ if __name__ == "__main__":
                     "buffers_size": 2048,
                     "sample_size": 32,
                     "gamma": 0.99,
-                    "eps": 0.987,
-                    "initial_random_steps": 64,#64 + period * 20,
+                    "eps": 0.989, #0.987
+                    "initial_random_steps": 64 ,#64 + period * 20,
                     "total_traffic": 500,
                     "period": period,
                     "num_nodes": 5,

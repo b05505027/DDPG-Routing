@@ -18,6 +18,7 @@ class Simulation:
         self.static_traffic = False
         self.period = period
         self.periodic_index = 0
+        self.broken_links = []
 
 
         # create a modeling graph
@@ -101,15 +102,16 @@ class Simulation:
     
     def step(self, action, next_traffic = False):
         weights = self.action_transform(action)
-        self.set_weights(weights)
-        self.set_traffic(self.current_traffic)
+        self.apply_weights(weights)
+        self.apply_traffic(self.current_traffic)
+        self.apply_broken_links()
         self.run_simulation()
         delay, lossrate = self.analyze_qos()
 
         print('delay_reward:', self.delay_reward(delay))
         print('lossrate_reward:', 0.2*self.lossrate_reward(lossrate))
         # input()
-        reward = self.delay_reward(delay) + 0.2*self.lossrate_reward(lossrate)
+        reward = 1*self.delay_reward(delay) +0.38*self.lossrate_reward(lossrate)
 
         # renew states
         if next_traffic:
@@ -168,7 +170,7 @@ class Simulation:
         
     # lossrate reward functino
     def lossrate_reward(self, lossrate):
-        return -100*lossrate
+        return -5*np.tanh(3*lossrate)
 
     # delay reward function
     def delay_reward(self, delay):
@@ -244,10 +246,14 @@ class Simulation:
             module = d['module']
             source = module.split('.')[1][4:]
             destination = module.split('.')[2][-2:-1]
-            if source == destination:
+
+            #print('source, destination', source, destination, 'mean', mean)
+            if source == destination or mean == 0:
                 continue
             else:
                 app_delays.append(mean)
+        # print('app_delays', app_delays)
+        # input()
         avg_delay = np.mean(app_delays)
     
         # analyze scalars.csv
@@ -256,17 +262,20 @@ class Simulation:
        'overflows', 'binedges', 'binvalues']'''
         df = pd.read_csv("scalars.csv")[['module', 'name','value']]
         df_total = df.query("name=='incomingPackets:count' & value.notna()")
-        df_lost = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
+        df_lost_drop = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
+        df_lost_down = df.query("name=='packetDropInterfaceDown:count' & value.notna()")
    
         
         data_total = df_total.to_dict('records')
-        data_lost = df_lost.to_dict('records')
+        data_lost_drop = df_lost_drop.to_dict('records')
+        data_lost_down = df_lost_down.to_dict('records')
 
-        data = list(zip(data_total, data_lost))
+        data = list(zip(data_total, data_lost_drop, data_lost_down))
         loss_rates = []
         for scalar in data:
             total_packets = int(scalar[0]['value'])
-            lost_packets = int(scalar[1]['value'])
+            lost_packets = int(scalar[1]['value']) + int(scalar[2]['value'])
+            # print('name', scalar[0]['module'])
             # print('total_packets', total_packets)
             # print('lost_packets', lost_packets)
             if total_packets != 0:
@@ -276,6 +285,7 @@ class Simulation:
         
         assert len(loss_rates)!= 0 # must be at least one loss rate
 
+        #print('loss_rates', loss_rates)
         avg_lossrate = np.mean(loss_rates)
 
 
@@ -284,8 +294,8 @@ class Simulation:
         return avg_delay, avg_lossrate
 
 
-    # setting link weights
-    def set_weights(self, link_weights):
+    # applying link weights
+    def apply_weights(self, link_weights):
         # link wieghts is an array of link weights
         weight_path = config["simulation_path"] + "/weights.xml"
         tree = ET.parse(weight_path)
@@ -295,8 +305,41 @@ class Simulation:
             link_node = root.findall(f"./autoroute/link[@name='link{i+1}']")[0]
             link_node.set("cost", str(link_weights[i]))
         tree.write(weight_path)
+    
+    def apply_broken_links(self):
+        ned_path = config["simulation_path"] + "/package.ned"
+        ned_template = open('package_tmp.ned', 'r').read()
+        links = {
+            "connected": " <--> Eth10M <--> ",
+            "disconnected": " <--> Eth10M {  disabled = true; } <--> ",
+        }
 
-    def set_traffic(self, traffic):
+        ports = [
+            ("node1.ethg[0]", "node3.ethg[0]"),
+            ("node1.ethg[1]", "node2.ethg[0]"),
+            ("node2.ethg[1]", "node4.ethg[0]"),
+            ("node3.ethg[1]", "node4.ethg[1]"),
+            ("node3.ethg[2]", "node5.ethg[0]"),
+            ("node4.ethg[2]", "node5.ethg[1]"),
+            ("node2.ethg[2]", "node3.ethg[3]"),
+        ]
+        
+        connection_strings = []
+        for i in range(7):
+            connection_strings.append("        " + ports[i][0] + links["connected"] + ports[i][1] + ";\n")
+        for j in self.broken_links:
+            connection_strings[j] = "        " + ports[j][0] + links["disconnected"] + ports[j][1] + ";\n"
+
+        connection_string = "".join(connection_strings)
+        #print(connection_string)
+        #input()
+        ned_template = ned_template.replace("<CONNECTIONS>", connection_string)
+        with open(ned_path, 'w') as f:
+            f.write(ned_template)
+        
+        
+
+    def apply_traffic(self, traffic):
         ini_path = config["simulation_path"] + "/omnetpp.ini"
         ini_template = open('omnetpp_tmp.ini', 'r').read()
         traffic = traffic.reshape(self.num_nodes, self.num_nodes)

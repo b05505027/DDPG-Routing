@@ -6,10 +6,9 @@ import inet.examples.inet.ipv4hook.MyRouter;
 import inet.networklayer.configurator.ipv4.Ipv4NetworkConfigurator;
 import inet.node.ethernet.Eth100M;
 import inet.node.ethernet.Eth1G;
-import inet.node.ethernet.EtherHost;
 import inet.node.inet.Router;
 import inet.node.inet.StandardHost;
-import inet.visualizer.integrated.IntegratedVisualizer;
+import inet.visualizer.common.IntegratedVisualizer;
 
 
 @license(LGPL);
@@ -29,49 +28,58 @@ network Network
         }
         node1: Router {
             @display("p=243,192");
+            numEthInterfaces = 5;
         }
         node2: Router {
             @display("p=243,339");
+            numEthInterfaces = 5;
         }
         node3: Router {
             @display("p=437,192");
+            numEthInterfaces = 5;
         }
         node4: Router {
             @display("p=437,339");
+            numEthInterfaces = 5;
         }
         node5: Router {
             @display("p=595,260");
+            numEthInterfaces = 5;
         }
         host1: StandardHost {
             @display("p=169,144");
+            numEthInterfaces = 1;
         }
         host2: StandardHost {
             @display("p=133,340");
+            numEthInterfaces = 1;
         }
         host3: StandardHost {
             @display("p=437,111");
+            numEthInterfaces = 1;
         }
         host5: StandardHost {
             @display("p=686,260");
+            numEthInterfaces = 1;
         }
         host4: StandardHost {
             @display("p=437,411");
+            numEthInterfaces = 1;
         }
-        visualizer: IntegratedVisualizer {
-            @display("p=565,109");
+        Visualizer: IntegratedVisualizer {
+            @display("p=550,111");
         }
-    connections: // network level connections
-        node1.ethg++ <--> Eth10M <--> node3.ethg++;
-        node1.ethg++ <--> Eth10M <--> node2.ethg++;
-        node2.ethg++ <--> Eth10M <--> node4.ethg++;
-        node3.ethg++ <--> Eth10M <--> node4.ethg++;
-        node3.ethg++ <--> Eth10M <--> node5.ethg++;
-        node4.ethg++ <--> Eth10M <--> node5.ethg++;
-        node2.ethg++ <--> Eth10M <--> node3.ethg++;
-        host1.ethg++ <--> Eth10M <--> node1.ethg++;
-        host2.ethg++ <--> Eth10M <--> node2.ethg++;
-        host4.ethg++ <--> Eth10M <--> node4.ethg++;
-        host3.ethg++ <--> Eth10M <--> node3.ethg++;
-        host5.ethg++ <--> Eth10M <--> node5.ethg++;
+    connections allowunconnected: // network level connections
+
+
+<CONNECTIONS>
+
+
+        host1.ethg++ <--> Eth10M <--> node1.ethg[2];
+        host2.ethg++ <--> Eth10M <--> node2.ethg[3];
+        host4.ethg++ <--> Eth10M <--> node4.ethg[3];
+        host3.ethg++ <--> Eth10M <--> node3.ethg[4];
+        host5.ethg++ <--> Eth10M <--> node5.ethg[2];
+
 }
 
