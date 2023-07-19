@@ -147,7 +147,9 @@ class DDPGAgent:
         critic_lr: float = 1e-3,
         l2_reg: float = 1e-6,
         session_name: str = "example",
-        link_failure_rate: float = 0.0,
+        failure_rate: float = 0.0,
+        recovery_rate: float = 0.0,
+        record_uniform: bool = False,
     ):
         """Initialize."""
         self.env = Simulation(num_nodes=5, total_traffic=total_traffic, period=period)
@@ -164,9 +166,9 @@ class DDPGAgent:
         self.critic_lr = critic_lr
         self.session_name = session_name
         self.period = period
-        self.link_failure_rate = link_failure_rate
-        self.failed_link = None
-        self.recover_time = None
+        self.failure_rate = failure_rate
+        self.recovery_rate = recovery_rate
+        self.record_uniform = record_uniform
         
         
 
@@ -231,17 +233,47 @@ class DDPGAgent:
 
         next_state, reward, done  = self.env.step(action, next_traffic=next_traffic)
 
+
         if not self.is_test:
             self.transition += [reward, next_state.reshape(-1), done] # (s, a, r, s', done)
             self.buffer.store(*self.transition)
-    
+
         return next_state, reward, done, reward_uniform
-    
+
+    def update_links(self):
+        broken_links = []
+        probability = 1
+        for i in range(2):
+            if i in self.env.broken_links: # currently broken
+                if np.random.random() < self.recovery_rate: # will recover
+                    probability *= self.recovery_rate
+                    continue
+                else: # still broken
+                    broken_links.append(i)
+                    probability *= (1 - self.recovery_rate)
+            else: # currently good
+                if np.random.random() < self.failure_rate: # will break
+                    broken_links.append(i)
+                    probability *= (self.failure_rate)
+                else: # still good
+                    probability *= (1 - self.failure_rate)
+                    continue
+
+        self.env.broken_links = broken_links
+
+        return probability
+
+        self.env.broken_links = broken_links
+
+
+
+
     def update_model(self) -> torch.Tensor:
         """Update the model by gradient descent."""
         device = self.device  # for shortening the following lines
         
         samples = self.buffer.sample_batch()
+
         state = torch.FloatTensor(samples["s"]).to(device)
         next_state = torch.FloatTensor(samples["next_s"]).to(device)
         action = torch.FloatTensor(samples["a"]).to(device)
@@ -256,30 +288,40 @@ class DDPGAgent:
         
 
         
+        
         # train critic
         values = self.critic(state, action)
 
-        # print('values', values)
-        # print('curr_return', curr_return)
         critic_loss = F.mse_loss(values, curr_return)
         
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+
+    
+        # Clip the gradient norms for stable training.
+        grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=10)
         self.critic_optimizer.step()
+        
                 
         # train actor
         actor_loss = -self.critic(state, self.actor(state)).mean()
         
+
+        
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=10)
         self.actor_optimizer.step()
+        
+        
+
         
         # target update
         self._target_soft_update()
         
         return actor_loss.data.cpu(), critic_loss.data.cpu()
     
-    def train(self, max_steps: int, plotting_interval: int = 200):
+    def train(self, max_steps: int, plotting_interval: int = 5):
         """Train the agent."""
         self.is_test = False
         
@@ -294,18 +336,7 @@ class DDPGAgent:
         link_failure_times = []
         
         for self.total_step in tqdm(range(1, max_steps + 1)):
-
-            # if not self.failed_link: # no faild link
-            #     if np.random.uniform() < self.link_failure_rate:
-            #         link_failure_times.append(self.total_step)
-            #         self.failed_link = np.random.choice(list(range(self.a_dim)))
-            #         self.recover_time = self.total_step + self.period
-            #         print('failed link: ', self.failed_link)
-            # else: # faild link exists, check for recovery
-            #     if self.total_step == self.recover_time:
-            #         print('recover link: ', self.failed_link)
-            #         self.failed_link = None
-            #         self.recover_time = None
+            
 
             exploration_rate = np.power(self.eps, self.total_step)
             exploration_rates.append(exploration_rate)
@@ -313,14 +344,14 @@ class DDPGAgent:
             score = 0
             score_uniform = 0
 
-            if self.total_step == 500:
-                self.env.broken_links = [0,1]
+            # if self.total_step == 500:
+            #     self.env.broken_links = [0,1]
 
             for timestep in range(self.period):
                 for ministep in range(3): # 3 mini steps in one episode
-
                     print("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
-                    #print(state)
+                    prob = self.update_links()
+                    print('state probablity', prob)
                     
                     action = self.select_action(state.reshape(1,-1), exploration_rate)
                     
@@ -329,7 +360,7 @@ class DDPGAgent:
                     else:
                         next_traffic = False
                 
-                    if self.total_step <= 5 and ministep == 0:
+                    if self.total_step <= 10000 and ministep == 0 and self.record_uniform:
                         next_state, reward, done, reward_uniform = self.step(action, require_uniform=True, next_traffic=False)
                         reward_uniform = reward_uniform * (1 - np.power(self.gamma,3))/(1-self.gamma)
                         score_uniform = reward_uniform + self.gamma * score_uniform
@@ -341,11 +372,12 @@ class DDPGAgent:
                     state = next_state
                     score  = reward + self.gamma * score
                 
-                    print('reward', reward)
-                    print('reward uniform', reward_uniform)
+                    #print('reward', reward)
+                    #print('reward uniform', reward_uniform)
                     # print('score', score)
                     # print('score_uniform', score_uniform)
                     print('broken links', self.env.broken_links)
+                    print('action', action.reshape(-1))
                     #print('done', done)
                     #print('length of scores_uniform', len(scores_uniform))
 
@@ -354,7 +386,7 @@ class DDPGAgent:
                         # state = self.env.get_current_state()
                         scores.append(score)
 
-                        if self.total_step <= 5:
+                        if self.total_step <= 10000 and self.record_uniform:
                             scores_uniform.append(score_uniform)
 
                         #print(scores)
@@ -377,7 +409,7 @@ class DDPGAgent:
                 actor_losses, 
                 critic_losses,
                 exploration_rates,
-                self.period,
+                30,
             )
                 
         
@@ -431,33 +463,42 @@ class DDPGAgent:
         if smoothing < 20:
             smoothing = 10
         """Plot the training progresses."""
-        def subplot(loc: int, title: str, values: List[float]):
+        def subplot(loc: int, title: str, values: List[float], color: str, legend: str):
             plt.subplot(loc)
             plt.title(title)
-            plt.plot(np.convolve(values, np.ones(smoothing)/smoothing, mode='valid'))
-            plt.plot(np.ones(len(values)) * np.mean(values), "--", color='red')
+            plt.plot(np.convolve(values, np.ones(smoothing)/smoothing, mode='valid'), color=color, linewidth=0.5, label=legend)
+            plt.plot(np.ones(len(values)) * np.mean(values), "--", color=color)
+            plt.legend()
 
+        CB91_Blue = '#2CBDFE'
+        CB91_Green = '#47DBCD'
+        CB91_Pink = '#F3A0F2'
+        CB91_Purple = '#9D2EC5'
+        CB91_Violet = '#661D98'
+        CB91_Amber = '#F5B14C'
+        CB91_Grey = '#BDBDBD'
         subplot_params = [
-            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores),
-            (132, "actor_loss", actor_losses),
-            (133, "critic_loss", critic_losses),
+            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, "DDPG"),
+            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform"),
+            (132, "actor_loss", actor_losses, CB91_Pink, None),
+            (133, "critic_loss", critic_losses, CB91_Purple,None),
         ]
         json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
         plt.close('all')
         plt.figure(figsize=(30, 5))
-        for loc, title, values in subplot_params:
+        for loc, title, values, color, legend in subplot_params:
             if len(values) > 0:
-             subplot(loc, title, values)
+             subplot(loc, title, values, color, legend)
         
         if len(scores_uniform) > 0:
             plt.subplot(131)
-            plt.plot(np.mean(scores_uniform)*np.ones(len(scores)), "--", color='cyan')
+            # plt.plot(np.mean(scores_uniform)*np.ones(len(scores)), "--", color='cyan')
             plt.twinx().plot(exploration_rates, "--", color='#F2BFC8')
         plt.savefig(f"./experiments/{self.session_name}/plot.png")
 
 if __name__ == "__main__":
     for actor_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
-        for critic_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
+        for critic_lr in [3e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
             for period in [5, 10, 20, 30, 40, 50, 100, 150]:
                 same_seed(2023)
                 session_name = str(int(time.time()))[4:] + "_" + names.get_full_name()
@@ -466,18 +507,21 @@ if __name__ == "__main__":
                     "s_dim": 7,
                     "a_dim": 7,
                     "buffers_size": 2048,
-                    "sample_size": 32,
-                    "gamma": 0.99,
+                    "sample_size": 64,
+                    "gamma": 0.9999,
                     "eps": 0.989, #0.987
                     "initial_random_steps": 64 ,#64 + period * 20,
-                    "total_traffic": 500,
+                    "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
+                    "failure_rate":0.1,
+                    "recovery_rate":0.1,
+                    "record_uniform": True,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
                 agent = DDPGAgent(**config)
-                agent.train(max_steps=600 + period * 20)
+                agent.train(max_steps=800)

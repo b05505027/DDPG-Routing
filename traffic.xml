@@ -1,36 +1,36 @@
 <config> 
 	<source node="1">
-    <destination node="1" traffic="6" />
-    <destination node="2" traffic="31" />
-    <destination node="3" traffic="13" />
+    <destination node="1" traffic="4" />
+    <destination node="2" traffic="19" />
+    <destination node="3" traffic="8" />
     <destination node="4" traffic="2" />
-    <destination node="5" traffic="3" />
+    <destination node="5" traffic="2" />
  	</source>
   <source node="2">
-    <destination node="1" traffic="31" />
-    <destination node="2" traffic="172" />
-    <destination node="3" traffic="69" />
-    <destination node="4" traffic="11" />
-    <destination node="5" traffic="12" />
+    <destination node="1" traffic="19" />
+    <destination node="2" traffic="103" />
+    <destination node="3" traffic="42" />
+    <destination node="4" traffic="7" />
+    <destination node="5" traffic="8" />
  	</source>
   <source node="3">
-    <destination node="1" traffic="13" />
-    <destination node="2" traffic="69" />
-    <destination node="3" traffic="28" />
-    <destination node="4" traffic="5" />
-    <destination node="5" traffic="5" />
+    <destination node="1" traffic="8" />
+    <destination node="2" traffic="42" />
+    <destination node="3" traffic="17" />
+    <destination node="4" traffic="3" />
+    <destination node="5" traffic="3" />
  	</source>
   <source node="4">
     <destination node="1" traffic="2" />
-    <destination node="2" traffic="11" />
-    <destination node="3" traffic="5" />
+    <destination node="2" traffic="7" />
+    <destination node="3" traffic="3" />
     <destination node="4" traffic="1" />
     <destination node="5" traffic="1" />
  	</source>
   <source node="5">
-    <destination node="1" traffic="3" />
-    <destination node="2" traffic="12" />
-    <destination node="3" traffic="5" />
+    <destination node="1" traffic="2" />
+    <destination node="2" traffic="8" />
+    <destination node="3" traffic="3" />
     <destination node="4" traffic="1" />
     <destination node="5" traffic="1" />
  	</source>

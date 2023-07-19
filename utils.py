@@ -20,9 +20,8 @@ class Simulation:
         self.periodic_index = 0
         self.broken_links = []
 
-
         # create a modeling graph
-        edges = [
+        self.edges = [
             (1, 3, {"weight": 0, "traffic": 0, "index": 1}),
             (1, 2, {"weight": 0, "traffic": 0, "index": 2}),
             (2, 4, {"weight": 0, "traffic": 0, "index": 3}),
@@ -34,7 +33,7 @@ class Simulation:
         self.G = nx.Graph()
         for i in range(1, self.num_nodes):
             self.G.add_node(i)
-        self.G.add_edges_from(edges)
+        self.G.add_edges_from(self.edges)
 
         # generate traffics and states
         if self.period:
@@ -59,12 +58,16 @@ class Simulation:
             return 3
         else:
             return 4
-
+    def update_graph(self):
+        self.G.remove_edges_from(list(self.G.edges()))
+        self.G.add_edges_from(list(filter(lambda x: x[2]['index']-1 not in self.broken_links, self.edges)))
     '''
         Generate the specific state (traffics on each edges) 
         according to the weights (action) and the current traffic
     '''
     def generate_state(self, weights, traffic_matrix):
+        # check if any link is broken
+        self.update_graph()
         
         if weights is None:
             weights = np.ones(7)
@@ -75,24 +78,36 @@ class Simulation:
         self.rebuild_graph()
 
         # set weights
-        for i, edge in enumerate(self.G.edges.data()):
-            edge[2]['weight'] = weights[i]
+        for edge in self.G.edges.data():
+            index = edge[2]['index'] - 1
+            edge[2]['weight'] = weights[index]
     
         # calculate the shortest paths
         shortest_paths = nx.shortest_path(self.G,  weight="weight")
-        
 
-        for i in range(self.num_nodes):
-            for j in range(self.num_nodes):
-                path = shortest_paths[i+1][j+1]
-                for k in range(len(path)-1):
-                    self.G.edges[path[k], path[k+1]]['traffic'] += traffic_matrix[i, j]
 
+        # for item in shortest_paths.items():
+        #     print(item)
+        # input()
+
+
+        for source in range(self.num_nodes):
+            source = source + 1
+            paths = shortest_paths[source] # the shortest paths from source to all other reachable nodes
+            for destination in paths.keys():
+                path = paths[destination]
+                for i in range(len(path)-1):
+                    self.G.edges[path[i], path[i+1]]['traffic'] += traffic_matrix[source-1, destination-1]
+    
         new_state = np.zeros(7, dtype=float)
-        for i, edge in enumerate(self.G.edges.data()):
-            new_state[i] = self.quantize_traffic(edge[2]['traffic'])
+        for edge in self.G.edges.data():
+            index = edge[2]['index'] - 1
+            new_state[index] = self.quantize_traffic(edge[2]['traffic'])
             self.quantize_traffic(edge[2]['traffic'])
+        for index in self.broken_links:
+            new_state[index] = -1
         new_state = new_state.reshape(1, -1)
+        print('new state', new_state)
         return new_state
 
 
@@ -108,8 +123,8 @@ class Simulation:
         self.run_simulation()
         delay, lossrate = self.analyze_qos()
 
-        print('delay_reward:', self.delay_reward(delay))
-        print('lossrate_reward:', 0.2*self.lossrate_reward(lossrate))
+        #print('delay_reward:', self.delay_reward(delay))
+        #print('lossrate_reward:', 0.2*self.lossrate_reward(lossrate))
         # input()
         reward = 1*self.delay_reward(delay) +0.38*self.lossrate_reward(lossrate)
 
@@ -178,7 +193,7 @@ class Simulation:
 
     def action_transform(self, action: np.ndarray) -> np.ndarray:
         action = action.reshape(-1)
-        action = (action + 1) / 2 * 10 + 1
+        action = (action + 1) / 2 * 5 + 1
         action = action.astype(int)
         action = action.tolist()
         action = list(map(lambda x: x+(x==0), action))
