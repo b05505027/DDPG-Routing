@@ -99,15 +99,19 @@ class Simulation:
                 for i in range(len(path)-1):
                     self.G.edges[path[i], path[i+1]]['traffic'] += traffic_matrix[source-1, destination-1]
     
-        new_state = np.zeros(7, dtype=float)
+        traffic_state = np.zeros(7, dtype=float)
+        failure_state = np.zeros(7, dtype=float)
+
+        
         for edge in self.G.edges.data():
             index = edge[2]['index'] - 1
-            new_state[index] = self.quantize_traffic(edge[2]['traffic'])
+            traffic_state[index] = self.quantize_traffic(edge[2]['traffic'])
             self.quantize_traffic(edge[2]['traffic'])
         for index in self.broken_links:
-            new_state[index] = -1
+            failure_state[index] = 1
+        new_state = np.concatenate((traffic_state, failure_state), axis=0)
         new_state = new_state.reshape(1, -1)
-        print('new state', new_state)
+        #print('new state', new_state)
         return new_state
 
 
@@ -117,16 +121,19 @@ class Simulation:
     
     def step(self, action, next_traffic = False):
         weights = self.action_transform(action)
+
+        #print('current traffic', self.current_traffic)
         self.apply_weights(weights)
         self.apply_traffic(self.current_traffic)
         self.apply_broken_links()
         self.run_simulation()
+
         delay, lossrate = self.analyze_qos()
 
         #print('delay_reward:', self.delay_reward(delay))
         #print('lossrate_reward:', 0.2*self.lossrate_reward(lossrate))
         # input()
-        reward = 1*self.delay_reward(delay) +0.38*self.lossrate_reward(lossrate)
+        reward = 1*self.delay_reward(delay) + 0.5*self.lossrate_reward(lossrate)
 
         # renew states
         if next_traffic:
@@ -267,9 +274,12 @@ class Simulation:
                 continue
             else:
                 app_delays.append(mean)
-        # print('app_delays', app_delays)
+        #print('app_delays', app_delays)
         # input()
-        avg_delay = np.mean(app_delays)
+        if len(app_delays) != 0:
+            avg_delay = np.mean(app_delays)
+        else:
+            avg_delay = 0
     
         # analyze scalars.csv
         '''['run', 'type', 'module', 'name', 'attrname', 'attrvalue', 'value',
@@ -289,10 +299,13 @@ class Simulation:
         loss_rates = []
         for scalar in data:
             total_packets = int(scalar[0]['value'])
+
+
             lost_packets = int(scalar[1]['value']) + int(scalar[2]['value'])
-            # print('name', scalar[0]['module'])
+            #print('name', scalar[0]['module'])
             # print('total_packets', total_packets)
-            # print('lost_packets', lost_packets)
+            # print('drop', scalar[1]['value'])
+            # print('down', scalar[2]['value'])
             if total_packets != 0:
                 loss_rates.append(lost_packets / total_packets)
             else:
@@ -315,6 +328,8 @@ class Simulation:
         weight_path = config["simulation_path"] + "/weights.xml"
         tree = ET.parse(weight_path)
         root = tree.getroot()
+
+        #print('link_weights', link_weights)
 
         for i in range(len(link_weights)):
             link_node = root.findall(f"./autoroute/link[@name='link{i+1}']")[0]
@@ -370,6 +385,7 @@ class Simulation:
                 node.set("traffic", amount)
                 traffic_string += f'*.host{source+1}.app[{destination+1}].sendBytes = {amount}kB\n'
         tree.write(traffic_path)
+        #print('traffic_string', traffic_string)
         ini_template = ini_template.replace("<TRAFFIC_PATTERN>", traffic_string)
         with open(ini_path, 'w') as f:
             f.write(ini_template)

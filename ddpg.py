@@ -150,6 +150,7 @@ class DDPGAgent:
         failure_rate: float = 0.0,
         recovery_rate: float = 0.0,
         record_uniform: bool = False,
+        max_broken_links: int = 0,
     ):
         """Initialize."""
         self.env = Simulation(num_nodes=5, total_traffic=total_traffic, period=period)
@@ -169,7 +170,7 @@ class DDPGAgent:
         self.failure_rate = failure_rate
         self.recovery_rate = recovery_rate
         self.record_uniform = record_uniform
-        
+        self.max_broken_links = max_broken_links
         
 
         
@@ -243,7 +244,7 @@ class DDPGAgent:
     def update_links(self):
         broken_links = []
         probability = 1
-        for i in range(2):
+        for i in range(self.max_broken_links):
             if i in self.env.broken_links: # currently broken
                 if np.random.random() < self.recovery_rate: # will recover
                     probability *= self.recovery_rate
@@ -273,7 +274,8 @@ class DDPGAgent:
         device = self.device  # for shortening the following lines
         
         samples = self.buffer.sample_batch()
-
+        
+        #print('samples', samples)
         state = torch.FloatTensor(samples["s"]).to(device)
         next_state = torch.FloatTensor(samples["next_s"]).to(device)
         action = torch.FloatTensor(samples["a"]).to(device)
@@ -281,6 +283,8 @@ class DDPGAgent:
         reward = (reward - reward.mean()) / (reward.std() + 1e-8)
         done = torch.FloatTensor(samples["done"].reshape(-1, 1)).to(device)
         
+
+        #print('reward', reward)
         masks = 1 - done
         next_action = self.actor_target(next_state)
         next_value = self.critic_target(next_state, next_action)
@@ -346,13 +350,15 @@ class DDPGAgent:
 
             # if self.total_step == 500:
             #     self.env.broken_links = [0,1]
-
+ 
             for timestep in range(self.period):
                 for ministep in range(3): # 3 mini steps in one episode
                     print("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
                     prob = self.update_links()
                     print('state probablity', prob)
                     
+
+                    print('current state', state)
                     action = self.select_action(state.reshape(1,-1), exploration_rate)
                     
                     if ministep == 2:
@@ -398,6 +404,7 @@ class DDPGAgent:
                 and self.total_step > self.initial_random_steps
             ):
                 actor_loss, critic_loss = self.update_model()
+                print('actor_loss, critic_loss',actor_loss, critic_loss)
                 actor_losses.append(actor_loss)
                 critic_losses.append(critic_loss)
             
@@ -484,6 +491,8 @@ class DDPGAgent:
             (133, "critic_loss", critic_losses, CB91_Purple,None),
         ]
         json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
+        if len(scores_uniform) > 0:
+            json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
         plt.close('all')
         plt.figure(figsize=(30, 5))
         for loc, title, values, color, legend in subplot_params:
@@ -504,13 +513,13 @@ if __name__ == "__main__":
                 session_name = str(int(time.time()))[4:] + "_" + names.get_full_name()
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
-                    "s_dim": 7,
+                    "s_dim": 14,
                     "a_dim": 7,
                     "buffers_size": 2048,
                     "sample_size": 64,
                     "gamma": 0.9999,
-                    "eps": 0.989, #0.987
-                    "initial_random_steps": 64 ,#64 + period * 20,
+                    "eps": 0.995, #0.987
+                    "initial_random_steps": 128 ,#64 + period * 20,
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
@@ -520,6 +529,7 @@ if __name__ == "__main__":
                     "failure_rate":0.1,
                     "recovery_rate":0.1,
                     "record_uniform": True,
+                    "max_broken_links": 4,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
