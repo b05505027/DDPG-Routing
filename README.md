@@ -12,8 +12,19 @@ Checkout configure.user, in line 21, replace 'PREFER_CLANG=yes' with 'PREFER_CLA
 8. Create your own project in the workspace.
 9. Right click the project icon > properties > project references > check inet4
 
+
+## building of omnetpp (mac version)
+
+
+1. source ./setenv
+2. ./configure
+3cl. make
+
+
 <!-- 
 ## building of INET Framework
 1. Go to  .\omnetpp-5.5.1 and type 'git clone https://github.com/inet-framework/inet.git' to clone the repo.
 2. Import it into your workspace.
 3. Right click the icon in the explorer and select 'build project'. -->
+
+

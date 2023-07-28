@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import random
 from typing import Dict, Tuple, List
-from utils import Simulation
+from utils import Simulation, Logger
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -82,9 +82,12 @@ class Actor(nn.Module):
         """Initialize."""
         super(Actor, self).__init__()
         
-        self.hidden1 = nn.Linear(input_dim, 128)
-        self.hidden2 = nn.Linear(128, 32)
-        self.out = nn.Linear(32, out_dim)
+        self.hidden1 = nn.Linear(input_dim, 300)
+        self.hidden2 = nn.Linear(300, 200)
+        # self.hidden3 = nn.Linear(128, 64)
+        # self.hidden4 = nn.Linear(64, 64)
+        # self.hidden5 = nn.Linear(64, 64)
+        self.out = nn.Linear(200, out_dim)
         
         self.out.weight.data.uniform_(-init_w, init_w)
         self.out.bias.data.uniform_(-init_w, init_w)
@@ -93,6 +96,9 @@ class Actor(nn.Module):
         """Forward method implementation."""
         x = F.relu(self.hidden1(state))
         x = F.relu(self.hidden2(x))
+        # x = F.relu(self.hidden3(x))
+        # x = F.relu(self.hidden4(x))
+        # x = F.relu(self.hidden5(x))
         action = self.out(x).tanh()
         
         return action
@@ -109,7 +115,8 @@ class Critic(nn.Module):
         
         self.hidden1 = nn.Linear(input_dim, 128)
         self.hidden2 = nn.Linear(128, 128)
-        self.out = nn.Linear(128, 1)
+        self.hidden3 = nn.Linear(128, 64)
+        self.out = nn.Linear(64, 1)
         
         self.out.weight.data.uniform_(-init_w, init_w)
         self.out.bias.data.uniform_(-init_w, init_w)
@@ -121,6 +128,7 @@ class Critic(nn.Module):
         x = torch.cat((state, action), dim=-1)
         x = F.relu(self.hidden1(x))
         x = F.relu(self.hidden2(x))
+        x = F.relu(self.hidden3(x))
         value = self.out(x)
         
         return value
@@ -149,11 +157,19 @@ class DDPGAgent:
         session_name: str = "example",
         failure_rate: float = 0.0,
         recovery_rate: float = 0.0,
+        test_failure_rate: float = 0.01,
+        test_recovery_rate: float = 0.1,
+        ministeps: int = 3,
         record_uniform: bool = False,
         max_broken_links: int = 0,
+        test_pretrained_model: str = "",
+        run_index: int = 0,
+        
     ):
+
+
         """Initialize."""
-        self.env = Simulation(num_nodes=5, total_traffic=total_traffic, period=period)
+        self.env = Simulation(num_nodes=5, total_traffic=total_traffic, period=period, run_index=run_index)
         self.a_dim = a_dim
         self.s_dim = s_dim
         self.buffer = ReplayBuffer(s_dim =s_dim, a_dim=a_dim, max_size=buffers_size, sample_size=sample_size)
@@ -169,14 +185,21 @@ class DDPGAgent:
         self.period = period
         self.failure_rate = failure_rate
         self.recovery_rate = recovery_rate
+        self.test_failure_rate = test_failure_rate
+        self.test_recovery_rate = test_recovery_rate
+        self.ministeps = ministeps
         self.record_uniform = record_uniform
         self.max_broken_links = max_broken_links
+        self.test_pretrained_model = test_pretrained_model
+        
+        self.logger = Logger("experiments/" + session_name + "/log.txt")
+        self.run_index = run_index
         
 
         
         
         # device: cpu / gpu
-        self.device = "mps"
+        self.device = "mps:" + str(run_index)
 
 
         # networks
@@ -217,10 +240,10 @@ class DDPGAgent:
         # adding noise
         if not self.is_test:
             # using beta distribution as noise
-            noise = exploration_rate*np.pi*(np.random.beta(0.1, 0.1, size=self.a_dim) - 0.5).reshape(1, -1)
-            #print('noise', noise)
+            noise = exploration_rate*(np.random.beta(0.5, 0.5, size=self.a_dim) - 0.5).reshape(1, -1)
+            #self.logger.write('noise', noise)
             selected_action = np.clip(selected_action + noise, -1.0, 1.0)
-            #print('selected_action', selected_action)
+            #self.logger.write('selected_action', selected_action)
         
         self.transition = [state.reshape(-1), selected_action.reshape(-1)] # (s, a,)
         return selected_action
@@ -244,20 +267,31 @@ class DDPGAgent:
     def update_links(self):
         broken_links = []
         probability = 1
+        
+        if self.is_test:
+            failure_rate = self.test_failure_rate
+            recovery_rate = self.test_recovery_rate
+        else:
+            failure_rate = self.failure_rate
+            recovery_rate = self.recovery_rate
+
+        self.logger.write('failure_rate', failure_rate)
+        self.logger.write('recovery_rate', recovery_rate)
+
         for i in range(self.max_broken_links):
             if i in self.env.broken_links: # currently broken
-                if np.random.random() < self.recovery_rate: # will recover
-                    probability *= self.recovery_rate
+                if np.random.random() < recovery_rate: # will recover
+                    probability *= recovery_rate
                     continue
                 else: # still broken
                     broken_links.append(i)
-                    probability *= (1 - self.recovery_rate)
+                    probability *= (1 - recovery_rate)
             else: # currently good
-                if np.random.random() < self.failure_rate: # will break
+                if np.random.random() < failure_rate: # will break
                     broken_links.append(i)
-                    probability *= (self.failure_rate)
+                    probability *= (failure_rate)
                 else: # still good
-                    probability *= (1 - self.failure_rate)
+                    probability *= (1 - failure_rate)
                     continue
 
         self.env.broken_links = broken_links
@@ -275,16 +309,21 @@ class DDPGAgent:
         
         samples = self.buffer.sample_batch()
         
-        #print('samples', samples)
+        #self.logger.write('samples', samples)
         state = torch.FloatTensor(samples["s"]).to(device)
         next_state = torch.FloatTensor(samples["next_s"]).to(device)
         action = torch.FloatTensor(samples["a"]).to(device)
         reward = torch.FloatTensor(samples["r"].reshape(-1, 1)).to(device)
-        reward = (reward - reward.mean()) / (reward.std() + 1e-8)
+        #reward = (reward - reward.mean()) / (reward.std() + 1e-8)
         done = torch.FloatTensor(samples["done"].reshape(-1, 1)).to(device)
         
-
-        #print('reward', reward)
+        self.logger.write("############## sampling ##############")
+        self.logger.write('state', state[:5])
+        self.logger.write('next_state', next_state[:5])
+        self.logger.write('action', action[:5])
+        self.logger.write('reward', reward[:5])
+        self.logger.write('##########################################')
+        #self.logger.write('reward', reward)
         masks = 1 - done
         next_action = self.actor_target(next_state)
         next_value = self.critic_target(next_state, next_action)
@@ -352,16 +391,16 @@ class DDPGAgent:
             #     self.env.broken_links = [0,1]
  
             for timestep in range(self.period):
-                for ministep in range(3): # 3 mini steps in one episode
-                    print("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
+                for ministep in range(self.ministeps): # 3 mini steps in one episode
+                    self.logger.write("====================total_step, timestep, ministep: ", self.total_step,timestep, ministep, "====================")
                     prob = self.update_links()
-                    print('state probablity', prob)
+                    #self.logger.write('state probablity', prob)
                     
-
-                    print('current state', state)
+                    
+                    self.logger.write('current state', state)
                     action = self.select_action(state.reshape(1,-1), exploration_rate)
                     
-                    if ministep == 2:
+                    if ministep == self.ministeps - 1:
                         next_traffic = True
                     else:
                         next_traffic = False
@@ -378,14 +417,14 @@ class DDPGAgent:
                     state = next_state
                     score  = reward + self.gamma * score
                 
-                    #print('reward', reward)
-                    #print('reward uniform', reward_uniform)
-                    # print('score', score)
-                    # print('score_uniform', score_uniform)
-                    print('broken links', self.env.broken_links)
-                    print('action', action.reshape(-1))
-                    #print('done', done)
-                    #print('length of scores_uniform', len(scores_uniform))
+                    #self.logger.write('reward', reward)
+                    #self.logger.write('reward uniform', reward_uniform)
+                    self.logger.write('score', score)
+                    # self.logger.write('score_uniform', score_uniform)
+                    self.logger.write(f'broken links: {str(self.env.broken_links):<20}')
+                    self.logger.write(f'action:{str(action.reshape(-1)):<20}')
+                    #self.logger.write('done', done)
+                    #self.logger.write('length of scores_uniform', len(scores_uniform))
 
                     # if episode ends
                     if done:         
@@ -395,8 +434,9 @@ class DDPGAgent:
                         if self.total_step <= 10000 and self.record_uniform:
                             scores_uniform.append(score_uniform)
 
-                        #print(scores)
-                        #print(scores_uniform)
+                        #self.logger.write(scores)
+                        #self.logger.write(scores_uniform)
+                    #self.logger.write("============================================================")
 
             # if training is ready
             if (
@@ -404,7 +444,6 @@ class DDPGAgent:
                 and self.total_step > self.initial_random_steps
             ):
                 actor_loss, critic_loss = self.update_model()
-                print('actor_loss, critic_loss',actor_loss, critic_loss)
                 actor_losses.append(actor_loss)
                 critic_losses.append(critic_loss)
             
@@ -418,29 +457,12 @@ class DDPGAgent:
                 exploration_rates,
                 30,
             )
-                
-        
-    def test(self):
-        """Test the agent."""
-        self.is_test = True
-        
-        state = self.env.reset()
-        done = False
-        score = 0
-        
-        frames = []
-        while not done:
-            frames.append(self.env.render(mode="rgb_array"))
-            action = self.select_action(state)
-            next_state, reward, done = self.step(action)
 
-            state = next_state
-            score += reward
-        
-        #print("score: ", score)
-        self.env.close()
-        
-        return frames
+            if self.total_step % 20 == 0:
+                torch.save(self.actor.state_dict(), f"./experiments/{self.session_name}/actor_{self.total_step}.ckpt")
+                
+
+
     
     def _target_soft_update(self):
         """Soft-update: target = tau*local + (1-tau)*target."""
@@ -456,6 +478,71 @@ class DDPGAgent:
         ):
             t_param.data.copy_(tau * l_param.data + (1.0 - tau) * t_param.data)
     
+
+    def test(self, max_steps: int):
+        """ load the pretrained model """
+        is_random = False
+        if self.test_pretrained_model == "random":
+            is_random = True
+        else:
+            self.actor.load_state_dict(torch.load(self.test_pretrained_model))
+        """Test the agent."""
+
+        
+        self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}, period: {self.period}")
+        self.env = Simulation(num_nodes=5, total_traffic=self.total_traffic, period=self.period, run_index=self.run_index)
+        self.is_test = True
+        self.total_step = 0
+        
+        
+
+
+        state = self.env.get_current_state()
+        scores = []
+        
+
+        # testing loop .........#
+        for self.total_step in tqdm(range(1, max_steps + 1)):
+            score = 0
+            for timestep in range(self.period):
+                for ministep in range(3): # 3 mini steps in one episode
+                    self.logger.write("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
+                    prob = self.update_links()
+
+                    if is_random:
+                        action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
+                    else:
+                        action = self.select_action(state.reshape(1,-1), 0)
+                    
+                    if ministep == 2:
+                        next_traffic = True
+                    else:
+                        next_traffic = False
+
+                    next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic)
+                    state = next_state
+                    score  = reward + self.gamma * score
+                
+                    self.logger.write('reward', reward)
+                    self.logger.write('score', score)
+                    self.logger.write('broken links', self.env.broken_links)
+                    self.logger.write('action', action.reshape(-1))
+
+                    if done:         
+                        scores.append(score)
+            
+
+            # plotting
+            self._plot(
+                self.total_step, 
+                scores, 
+                [],
+                [], 
+                [],
+                [],
+                30,
+            )
+        # testing loop ends .........#
     def _plot(
         self, 
         frame_idx: int, 
@@ -475,7 +562,8 @@ class DDPGAgent:
             plt.title(title)
             plt.plot(np.convolve(values, np.ones(smoothing)/smoothing, mode='valid'), color=color, linewidth=0.5, label=legend)
             plt.plot(np.ones(len(values)) * np.mean(values), "--", color=color)
-            plt.legend()
+            if legend:
+                plt.legend()
 
         CB91_Blue = '#2CBDFE'
         CB91_Green = '#47DBCD'
@@ -484,54 +572,90 @@ class DDPGAgent:
         CB91_Violet = '#661D98'
         CB91_Amber = '#F5B14C'
         CB91_Grey = '#BDBDBD'
+
+        if self.is_test:
+            first_title = self.test_pretrained_model
+        else:
+            first_title = "DDPG"
         subplot_params = [
-            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, "DDPG"),
+            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, first_title),
             (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform"),
             (132, "actor_loss", actor_losses, CB91_Pink, None),
             (133, "critic_loss", critic_losses, CB91_Purple,None),
         ]
-        json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
+
+        if self.is_test:
+            json.dump(scores, open(f"./experiments/{self.session_name}/scores_test.json", "w"))
+        else:
+            json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
         if len(scores_uniform) > 0:
-            json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
+            if self.is_test:
+                json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform_test.json", "w"))
+            else:
+                json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
         plt.close('all')
         plt.figure(figsize=(30, 5))
         for loc, title, values, color, legend in subplot_params:
             if len(values) > 0:
              subplot(loc, title, values, color, legend)
         
-        if len(scores_uniform) > 0:
+        if not self.is_test:
             plt.subplot(131)
-            # plt.plot(np.mean(scores_uniform)*np.ones(len(scores)), "--", color='cyan')
             plt.twinx().plot(exploration_rates, "--", color='#F2BFC8')
-        plt.savefig(f"./experiments/{self.session_name}/plot.png")
+        if self.is_test:
+            plt.savefig(f"./experiments/{self.session_name}/plot_test.png")
+        else:
+            plt.savefig(f"./experiments/{self.session_name}/plot.png")
 
 if __name__ == "__main__":
+    
+    name = names.get_full_name()
     for actor_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
         for critic_lr in [3e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
             for period in [5, 10, 20, 30, 40, 50, 100, 150]:
+                checkpoint = ""
+                for x in time.localtime()[:6]:
+                    checkpoint += str(x) + "_"
                 same_seed(2023)
-                session_name = str(int(time.time()))[4:] + "_" + names.get_full_name()
+                session_name = checkpoint + "_" + name
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
                     "s_dim": 14,
                     "a_dim": 7,
-                    "buffers_size": 2048,
+                    "buffers_size": 4096,
                     "sample_size": 64,
                     "gamma": 0.9999,
                     "eps": 0.995, #0.987
-                    "initial_random_steps": 128 ,#64 + period * 20,
+                    "initial_random_steps": 64 ,#64 + period * 20,
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
-                    "failure_rate":0.1,
-                    "recovery_rate":0.1,
-                    "record_uniform": True,
+                    "failure_rate":0.01, #0.01,
+                    "recovery_rate":0.1, #0.1,
+                    "test_failure_rate":0,
+                    "test_recovery_rate":0,
+                    "ministeps": 3, #3,
+                    "record_uniform": False,
                     "max_broken_links": 4,
+                    "test_pretrained_model":"",
+                    "run_index":0,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
                 agent = DDPGAgent(**config)
-                agent.train(max_steps=800)
+                agent.train(max_steps=10000)
+                exit(0)
+
+                # problems of generating same actions for all states
+                # 1-layer
+                # [1, 1, -1, 1, -1, -1, -1]
+                # [1, -1, 1, 1, -1, -1, -1]
+
+                # safe states best learned policy 1-layer
+                # [-1 -1  1 1 1 -1 1]
+
+                # safe states best learned policy 2-layer
+

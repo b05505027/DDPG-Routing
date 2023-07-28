@@ -3,15 +3,44 @@ import os, subprocess
 import pandas as pd
 import numpy as np
 import networkx as nx 
-config = {
-    "project_path": "/Users/liangjialun/Desktop/routing",
-    "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations",
-}
 
+configs = [
+    {
+        "project_path": "/Users/liangjialun/Desktop/routing",
+        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations",
+        "ini":'omnetpp_1_tmp.ini',
+        "ned":'package_1_tmp.ned',
+        'traffic':'traffic_1.xml',
+    },
+    {
+        "project_path": "/Users/liangjialun/Desktop/routing",
+        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations2",
+        "ini":'omnetpp_2_tmp.ini',
+        "ned":'package_2_tmp.ned',
+        'traffic':'traffic_2.xml',
 
+    },
+    {
+        "project_path": "/Users/liangjialun/Desktop/routing",
+        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations3",
+        "ini":'omnetpp_3_tmp.ini',
+        "ned":'package_3_tmp.ned',
+        'traffic':'traffic_3.xml',
+
+    }
+]
+
+class Logger:
+    def __init__(self, log_path):
+        self.log_path = log_path
+    
+    def write(self, *message):
+        message = ' '.join(map(str, message))
+        with open(self.log_path, 'a') as f:
+            f.write(message + '\n')
 
 class Simulation:
-    def __init__(self, num_nodes, total_traffic, period):
+    def __init__(self, num_nodes, total_traffic, period, run_index):
         self.omnet_init()
         self.num_nodes = num_nodes
         self.total_traffic = total_traffic
@@ -19,6 +48,9 @@ class Simulation:
         self.period = period
         self.periodic_index = 0
         self.broken_links = []
+        self.run_index = run_index
+
+        
 
         # create a modeling graph
         self.edges = [
@@ -50,14 +82,15 @@ class Simulation:
 
     def quantize_traffic(self, traffic):
         traffic = traffic / self.total_traffic
-        if traffic <= 0.1:
-            return 1
-        elif traffic <= 0.2:
-            return 2
-        elif traffic <= 0.3:
-            return 3
-        else:
-            return 4
+        # if traffic <= 0.1:
+        #     return 1
+        # elif traffic <= 0.2:
+        #     return 2
+        # elif traffic <= 0.3:
+        #     return 3
+        # else:
+        #     return 4
+        return traffic
     def update_graph(self):
         self.G.remove_edges_from(list(self.G.edges()))
         self.G.add_edges_from(list(filter(lambda x: x[2]['index']-1 not in self.broken_links, self.edges)))
@@ -128,6 +161,8 @@ class Simulation:
         self.apply_broken_links()
         self.run_simulation()
 
+
+        #for i in range(100000):
         delay, lossrate = self.analyze_qos()
 
         #print('delay_reward:', self.delay_reward(delay))
@@ -222,16 +257,19 @@ class Simulation:
     def run_simulation(self):
         # cmd = "../../../bin/opp_run.exe -r 0 -m -u Cmdenv -c traffic100 -n .;../src omnetpp.ini"                                                                
         # cmd = " ".join(["opp_run",  "-r" , "0", "-m", "-u", "Cmdenv", "-c", "traffic100", '-n', '.;..\\src;..\\..\\inet\\src;..\\..\\inet\\examples;..\\..\\inet\\tutorials;..\\..\\inet\\showcases'])
-        os.chdir(config["simulation_path"])
+        os.chdir(configs[self.run_index]["simulation_path"])
+        process = subprocess.run("pwd", shell=True, capture_output=True)
+        #print('pwd:', process.stdout.decode('utf-8'))
         
         #cmd = " ".join(["opp_run", "-l" ,"../../inet4.5/src/inet", "-r" , "0", "-m", "-u", "Cmdenv", '-n', ":".join([".","../src","../../inet4.5/src","../../inet4.5/examples","../../inet4.5/tutorials","../../inet4.5/showcases"])])
         # os.system(cmd)
 
-        cmd = " opp_run -r 0 -m -u Cmdenv -c General -n .:../src:../../inet4.5/examples:../../inet4.5/showcases:../../inet4.5/src:../../inet4.5/tests/validation:../../inet4.5/tests/networks:../../inet4.5/tutorials -x 'inet.common.selfdoc;inet.linklayer.configurator.gatescheduling.z3;inet.emulation;inet.showcases.visualizer.osg;inet.examples.emulation;inet.showcases.emulation;inet.transportlayer.tcp_lwip;inet.applications.voipstream;inet.visualizer.osg;inet.examples.voipstream' --image-path=../../inet4.5/images -l ../../inet4.5/src/INET omnetpp.ini "
+        cmd = " opp_run -r 0 --result-dir='results' -m -u Cmdenv -c General -n .:../src:../../inet4.5/examples:../../inet4.5/showcases:../../inet4.5/src:../../inet4.5/tests/validation:../../inet4.5/tests/networks:../../inet4.5/tutorials -x 'inet.common.selfdoc;inet.linklayer.configurator.gatescheduling.z3;inet.emulation;inet.showcases.visualizer.osg;inet.examples.emulation;inet.showcases.emulation;inet.transportlayer.tcp_lwip;inet.applications.voipstream;inet.visualizer.osg;inet.examples.voipstream' --image-path=../../inet4.5/images -l ../../inet4.5/src/INET omnetpp.ini "
 
         trial = 5
         while trial > 0:
             process = subprocess.run(cmd, shell=True, capture_output=True)
+            #print(f'output: {process.stdout.decode("utf-8")}')
             if process.returncode != 0:
                 print(f'output: {process.stdout.decode("utf-8")}')
                 print(f'output: {process.stderr}')
@@ -242,19 +280,31 @@ class Simulation:
         if trial == 0:
             print('Simulation failed')
             exit(1)
-        os.chdir(config['project_path'])
+        os.chdir(configs[self.run_index]['project_path'])
         #print(process.stdout.decode('utf-8'))
 
     # analyze qos
     def analyze_qos(self):
-        os.chdir(config["simulation_path"])
+        os.chdir(configs[self.run_index]["simulation_path"])
         # create vectors.csv
+        
+
+        message = ""
+
         cmd = " ".join(["opp_scavetool", "export", "-o", "vectors.csv", "./results/*.vec"])
         process = subprocess.run(cmd, shell=True, capture_output=True)
+        # print(f'output: {process.stdout.decode("utf-8")}')
+        # print(f'output: {process.stderr}')
+        message = process.stdout.decode("utf-8")
+        if "empty" in message:
+            input()
+
 
         # create scalars.csv
         cmd = " ".join(["opp_scavetool", "export", "-o", "scalars.csv", "./results/*.sca"])
         process = subprocess.run(cmd, shell=True, capture_output=True)
+        # print(f'output: {process.stdout.decode("utf-8")}')
+        # print(f'output: {process.stderr}')
 
         # analyze vectors.csv
         df = pd.read_csv("vectors.csv")[['attrname','module', 'name','vecvalue']]
@@ -274,7 +324,7 @@ class Simulation:
                 continue
             else:
                 app_delays.append(mean)
-        #print('app_delays', app_delays)
+        #print('app_delays', np.mean(app_delays))
         # input()
         if len(app_delays) != 0:
             avg_delay = np.mean(app_delays)
@@ -313,19 +363,19 @@ class Simulation:
         
         assert len(loss_rates)!= 0 # must be at least one loss rate
 
-        #print('loss_rates', loss_rates)
+        #print('loss_rates', np.mean(loss_rates))
         avg_lossrate = np.mean(loss_rates)
 
 
 
-        os.chdir(config['project_path'])
+        os.chdir(configs[self.run_index]['project_path'])
         return avg_delay, avg_lossrate
 
 
     # applying link weights
     def apply_weights(self, link_weights):
         # link wieghts is an array of link weights
-        weight_path = config["simulation_path"] + "/weights.xml"
+        weight_path = configs[self.run_index]["simulation_path"] + "/weights.xml"
         tree = ET.parse(weight_path)
         root = tree.getroot()
 
@@ -337,8 +387,8 @@ class Simulation:
         tree.write(weight_path)
     
     def apply_broken_links(self):
-        ned_path = config["simulation_path"] + "/package.ned"
-        ned_template = open('package_tmp.ned', 'r').read()
+        ned_path = configs[self.run_index]["simulation_path"] + "/package.ned"
+        ned_template = open(configs[self.run_index]['ned'], 'r').read()
         links = {
             "connected": " <--> Eth10M <--> ",
             "disconnected": " <--> Eth10M {  disabled = true; } <--> ",
@@ -370,10 +420,10 @@ class Simulation:
         
 
     def apply_traffic(self, traffic):
-        ini_path = config["simulation_path"] + "/omnetpp.ini"
-        ini_template = open('omnetpp_tmp.ini', 'r').read()
+        ini_path = configs[self.run_index]["simulation_path"] + "/omnetpp.ini"
+        ini_template = open(configs[self.run_index]['ini'], 'r').read()
         traffic = traffic.reshape(self.num_nodes, self.num_nodes)
-        traffic_path = "traffic.xml"
+        traffic_path = configs[self.run_index]['traffic']
         tree = ET.parse(traffic_path)
         root = tree.getroot()
         traffic_string = ""
