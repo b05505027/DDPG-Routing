@@ -1,54 +1,60 @@
-import networkx as nx
+import numpy as np
+from utils import get_state_distribution
 
+# def binary_states(n_bits):
+#     if n_bits >= 1:
+#         states = binary_states(n_bits-1)*2
+        
+#         for i in range(len(states)//2):
+#             states[i] += str(0)
+            
+#         for i in range(len(states)//2, len(states)):
+#             states[i] += str(1)
+            
+#     else:
+#         states = [""]
+#     return states
+        
 
+# def get_state_distribution(n_links, max_broken_links, failure_rate, recovery_rate):
+#     states = binary_states(max_broken_links)
+#     transition_matrix = np.ones((len(states), len(states)), dtype=np.float32)
+#     for i in range(len(states)):
+#         for j in range(len(states)):
+#             for k in range(max_broken_links):
+#                 if states[i][k] == states[j][k]:
+#                     if states[i][k] == "0":
+#                         transition_matrix[i][j] *= 1 - failure_rate
+#                     else:
+#                         transition_matrix[i][j] *= 1 - recovery_rate
+#                 else:
+#                     if states[i][k] == "0":
+#                         transition_matrix[i][j] *= failure_rate
+#                     else:
+#                         transition_matrix[i][j] *= recovery_rate
+#     for i in range(len(states)):
+#         states[i] = states[i].zfill(n_links)[::-1]
 
-edges = [
-    (1, 2, {"weight": 4, "traffic": 0}),
-    (1, 3, {"weight": 2, "traffic": 0}),
-    (2, 3, {"weight": 1, "traffic": 0}),
-    (2, 4, {"weight": 5, "traffic": 0}),
-    (3, 4, {"weight": 8, "traffic": 0}),
-    (3, 5, {"weight": 10, "traffic": 0}),
-    (4, 5, {"weight": 2, "traffic": 0}),
-    (4, 6, {"weight": 8, "traffic": 0}),
-    (5, 6, {"weight": 5, "traffic": 0}),
-]
-edge_labels = {
-    (1, 2): 4,
-    (1, 3): 2,
-    (2, 3): 1,
-    (2, 4): 5,
-    (3, 4): 8,
-    (3, 5): 10,
-    (4, 5): 2,
-    (4, 6): 8,
-    (5, 6): 5,
-}
+#     # transpose it to get the right order
+#     transition_matrix = transition_matrix.T
+#     eigenvals, eigenvects = np.linalg.eig(transition_matrix)
 
+#     '''
+#     Find the indexes of the eigenvalues that are close to one.
+#     Use them to select the target eigen vectors. Flatten the result.
+#     '''
+#     close_to_1_idx = np.isclose(eigenvals,1)
+#     target_eigenvect = eigenvects[:,close_to_1_idx]
+#     target_eigenvect = target_eigenvect[:,0]
+#     # Turn the eigenvector elements into probabilites
+#     stationary_distrib = target_eigenvect / sum(target_eigenvect) 
 
-G = nx.Graph()
-for i in range(1, 7):
-    G.add_node(i)
-G.add_edges_from(edges)
+#     return states, stationary_distrib
 
-pos = nx.planar_layout(G)
+if __name__ == '__main__':
+    states, stationary_distrib = get_state_distribution(7, 4, 0.01, 0.1)
+    print(states)
+    print(stationary_distrib)
 
-# This will give us all the shortest paths from node 1 using the weights from the edges.
-p1 = nx.shortest_path(G,  weight="weight")
-
-# This will give us the shortest path from node 1 to node 6.
-p1to6 = nx.shortest_path(G, source=1, target=6, weight="weight")
-
-# This will give us the length of the shortest path from node 1 to node 6.
-length = nx.shortest_path_length(G, source=1, target=6, weight="weight")
-
-
-es = G.edges()
-es[2,3]['traffic'] += 12
-print(es[2,3]['traffic'])
-print("All shortest paths from 1: ", p1[1][6])
-print("Shortest path from 1 to 6: ", p1to6)
-print("Length of the shortest path: ", length)
-
-for edge in es.data():
-    print('source destination traffic', edge[0], edge[1], edge[2]['traffic'])
+    # state '0011000'
+    print(stationary_distrib[states.index('0011000')])

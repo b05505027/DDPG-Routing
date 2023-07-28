@@ -1,20 +1,24 @@
 import torch
 import numpy as np
 import random
+import sys
 from typing import Dict, Tuple, List
-from utils import Simulation, Logger
+from utils import Simulation, Logger, get_state_distribution
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import matplotlib
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 import names
 import os
 import json
 import time
+from memory_profiler import profile
 if torch.backends.cudnn.enabled:
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+
 
 
 def same_seed(seed):
@@ -199,7 +203,8 @@ class DDPGAgent:
         
         
         # device: cpu / gpu
-        self.device = "mps:" + str(run_index)
+        self.device = "cpu"
+        #self.device = "mps:" + str(run_index)
 
 
         # networks
@@ -248,6 +253,7 @@ class DDPGAgent:
         self.transition = [state.reshape(-1), selected_action.reshape(-1)] # (s, a,)
         return selected_action
     
+    #@profile(stream=sys.stdout)
     def step(self, action: np.ndarray, require_uniform, next_traffic) -> Tuple[np.ndarray, np.float64, bool]:
         """Take an action and return the response of the env."""
         if require_uniform:
@@ -267,7 +273,8 @@ class DDPGAgent:
     def update_links(self):
         broken_links = []
         probability = 1
-        
+        probability_test = 1
+
         if self.is_test:
             failure_rate = self.test_failure_rate
             recovery_rate = self.test_recovery_rate
@@ -277,28 +284,31 @@ class DDPGAgent:
 
         self.logger.write('failure_rate', failure_rate)
         self.logger.write('recovery_rate', recovery_rate)
-
+        
         for i in range(self.max_broken_links):
             if i in self.env.broken_links: # currently broken
                 if np.random.random() < recovery_rate: # will recover
                     probability *= recovery_rate
+                    probability_test *= self.test_recovery_rate
                     continue
                 else: # still broken
                     broken_links.append(i)
                     probability *= (1 - recovery_rate)
+                    probability_test *= (1 - self.test_recovery_rate)
             else: # currently good
                 if np.random.random() < failure_rate: # will break
                     broken_links.append(i)
                     probability *= (failure_rate)
+                    probability_test *= (self.test_failure_rate)
                 else: # still good
                     probability *= (1 - failure_rate)
+                    probability_test *= (1 - self.test_failure_rate)
                     continue
 
         self.env.broken_links = broken_links
 
-        return probability
+        return probability, probability_test
 
-        self.env.broken_links = broken_links
 
 
 
@@ -364,12 +374,27 @@ class DDPGAgent:
         
         return actor_loss.data.cpu(), critic_loss.data.cpu()
     
-    def train(self, max_steps: int, plotting_interval: int = 5):
+
+    #@profile(stream=sys.stdout)
+    def train(self, max_steps: int, plotting_interval: int = 30):
         """Train the agent."""
         self.is_test = False
+
+        # get initial state distribution
+        state_list, train_stationary_distrib = get_state_distribution(
+                                        n_links = self.a_dim,
+                                        max_broken_links = self.max_broken_links,
+                                        failure_rate = self.failure_rate,
+                                        recovery_rate = self.recovery_rate)
+        state_list, test_stationary_distrib = get_state_distribution(
+                                n_links = self.a_dim,
+                                max_broken_links = self.max_broken_links,
+                                failure_rate = self.test_failure_rate,
+                                recovery_rate = self.test_recovery_rate)
+
+        
         
         state = self.env.get_current_state()
-
 
         actor_losses = []
         critic_losses = []
@@ -389,12 +414,33 @@ class DDPGAgent:
 
             # if self.total_step == 500:
             #     self.env.broken_links = [0,1]
+
+            # get initial state probability
+            state_str = [0] * self.a_dim
+            for i in self.env.broken_links:
+                state_str[i] = 1
+            state_str = ''.join(map(str, state_str))
+            train_init_prob = train_stationary_distrib[state_list.index(state_str)]
+            test_init_prob = test_stationary_distrib[state_list.index(state_str)]
+
+            print(f'state_str', state_str)
+            print(f'train_init_prob: {train_init_prob}')
+            print(f'test_init_prob: {test_init_prob}')
+            is_ratio = test_init_prob / train_init_prob
+            print(f'is_ratio: {is_ratio}')
  
             for timestep in range(self.period):
                 for ministep in range(self.ministeps): # 3 mini steps in one episode
                     self.logger.write("====================total_step, timestep, ministep: ", self.total_step,timestep, ministep, "====================")
-                    prob = self.update_links()
+                    prob, prob_test = self.update_links()
                     #self.logger.write('state probablity', prob)
+
+                    if timestep != 0 or ministep != 0:
+                        print(self.env.broken_links)
+                        print(f'prob: {prob}')
+                        print(f'prob_test: {prob_test}')
+                        is_ratio = prob_test / prob
+                        print(f'is_ratio: {is_ratio}')
                     
                     
                     self.logger.write('current state', state)
@@ -448,15 +494,42 @@ class DDPGAgent:
                 critic_losses.append(critic_loss)
             
             # plotting
-            self._plot(
-                self.total_step, 
-                scores, 
-                scores_uniform,
-                actor_losses, 
-                critic_losses,
-                exploration_rates,
-                30,
-            )
+            if self.total_step % plotting_interval == 0:
+                self._plot(
+                    self.total_step, 
+                    scores, 
+                    scores_uniform,
+                    actor_losses, 
+                    critic_losses,
+                    exploration_rates,
+                    30,
+                )
+
+            # collection = []
+            # for name in list(locals().keys()):
+            #     vs =  dir(eval(name))
+            #     if '__class__' in vs:
+            #         for v in vs:
+            #             if v[0] != "_":
+            #                 try:
+            #                     collection.append((v, sys.getsizeof(eval(name + "." + v))/1000000))
+            #                 except Exception as e:
+            #                     print(e)
+            #     else:
+            #         collection.append((name, sys.getsizeof(eval(name))/1000000))
+            # for name in list(globals().keys()):
+            #     vs =  dir(eval(name))
+            #     if '__class__' in vs:
+            #         for v in vs:
+            #             if v[0] != "_":
+            #                 try:
+            #                     collection.append((v, sys.getsizeof(eval(name + "." + v))/1000000))
+            #                 except Exception as e:
+            #                     print(e)
+            #     else:
+            #         collection.append((name, sys.getsizeof(eval(name))/1000000))
+            # print(f'====================== {self.total_step} ======================')
+            # print(list(sorted(collection, key=lambda x: x[1], reverse=True))[:20])
 
             if self.total_step % 20 == 0:
                 torch.save(self.actor.state_dict(), f"./experiments/{self.session_name}/actor_{self.total_step}.ckpt")
@@ -543,6 +616,7 @@ class DDPGAgent:
                 30,
             )
         # testing loop ends .........#
+    #@profile(stream=sys.stdout)
     def _plot(
         self, 
         frame_idx: int, 
@@ -606,7 +680,7 @@ class DDPGAgent:
             plt.savefig(f"./experiments/{self.session_name}/plot_test.png")
         else:
             plt.savefig(f"./experiments/{self.session_name}/plot.png")
-
+        plt.clf() 
 if __name__ == "__main__":
     
     name = names.get_full_name()
@@ -626,7 +700,7 @@ if __name__ == "__main__":
                     "sample_size": 64,
                     "gamma": 0.9999,
                     "eps": 0.995, #0.987
-                    "initial_random_steps": 64 ,#64 + period * 20,
+                    "initial_random_steps": 2 ,#64 + period * 20,
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
@@ -635,9 +709,9 @@ if __name__ == "__main__":
                     "session_name": session_name,
                     "failure_rate":0.01, #0.01,
                     "recovery_rate":0.1, #0.1,
-                    "test_failure_rate":0,
-                    "test_recovery_rate":0,
-                    "ministeps": 3, #3,
+                    "test_failure_rate":0.001,
+                    "test_recovery_rate":0.1,
+                    "ministeps": 1, #3,
                     "record_uniform": False,
                     "max_broken_links": 4,
                     "test_pretrained_model":"",
