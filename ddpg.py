@@ -41,6 +41,7 @@ class ReplayBuffer:
         self.a_buffer = np.zeros([max_size, a_dim], dtype=np.float32)
         self.r_buffer = np.zeros([max_size], dtype=np.float32)
         self.done_buffer = np.zeros([max_size], dtype=np.float32)
+        self.is_buffer = np.zeros([max_size], dtype=np.float32)
         self.max_size, self.sample_size = max_size, sample_size
         self.ptr, self.size, = 0, 0
 
@@ -50,6 +51,7 @@ class ReplayBuffer:
         a: np.ndarray, 
         r: float, 
         next_s: np.ndarray, 
+        is_ratio: float,
         done: bool,
     ):
         """Store the transition in buffer."""
@@ -58,6 +60,7 @@ class ReplayBuffer:
         self.a_buffer[self.ptr] = a
         self.r_buffer[self.ptr] = r
         self.done_buffer[self.ptr] = done
+        self.is_buffer[self.ptr] = is_ratio
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
@@ -68,6 +71,7 @@ class ReplayBuffer:
                     next_s=self.next_s_buffer[idxs],
                     a=self.a_buffer[idxs],
                     r=self.r_buffer[idxs],
+                    is_ratio=self.is_buffer[idxs],
                     done=self.done_buffer[idxs])
 
     def __len__(self) -> int:
@@ -203,8 +207,8 @@ class DDPGAgent:
         
         
         # device: cpu / gpu
-        self.device = "cpu"
-        #self.device = "mps:" + str(run_index)
+        #self.device = "cpu"
+        self.device = "mps"
 
 
         # networks
@@ -254,7 +258,7 @@ class DDPGAgent:
         return selected_action
     
     #@profile(stream=sys.stdout)
-    def step(self, action: np.ndarray, require_uniform, next_traffic) -> Tuple[np.ndarray, np.float64, bool]:
+    def step(self, action: np.ndarray, require_uniform, next_traffic, is_ratio = 1.0) -> Tuple[np.ndarray, np.float64, bool]:
         """Take an action and return the response of the env."""
         if require_uniform:
             _, reward_uniform, done  = self.env.step(np.ones(self.a_dim, dtype=float), next_traffic=False)
@@ -265,7 +269,7 @@ class DDPGAgent:
 
 
         if not self.is_test:
-            self.transition += [reward, next_state.reshape(-1), done] # (s, a, r, s', done)
+            self.transition += [reward, next_state.reshape(-1), is_ratio, done] # (s, a, r, s', is_ratio, done)
             self.buffer.store(*self.transition)
 
         return next_state, reward, done, reward_uniform
@@ -325,6 +329,7 @@ class DDPGAgent:
         action = torch.FloatTensor(samples["a"]).to(device)
         reward = torch.FloatTensor(samples["r"].reshape(-1, 1)).to(device)
         #reward = (reward - reward.mean()) / (reward.std() + 1e-8)
+        is_ratio = torch.FloatTensor(samples["is_ratio"].reshape(-1, 1)).to(device)
         done = torch.FloatTensor(samples["done"].reshape(-1, 1)).to(device)
         
         self.logger.write("############## sampling ##############")
@@ -332,12 +337,13 @@ class DDPGAgent:
         self.logger.write('next_state', next_state[:5])
         self.logger.write('action', action[:5])
         self.logger.write('reward', reward[:5])
+        self.logger.write('is_ratio', is_ratio[:5])
         self.logger.write('##########################################')
         #self.logger.write('reward', reward)
         masks = 1 - done
         next_action = self.actor_target(next_state)
         next_value = self.critic_target(next_state, next_action)
-        curr_return = reward + self.gamma * next_value * masks
+        curr_return = reward + self.gamma * is_ratio * next_value * masks
         
 
         
@@ -381,16 +387,16 @@ class DDPGAgent:
         self.is_test = False
 
         # get initial state distribution
-        state_list, train_stationary_distrib = get_state_distribution(
-                                        n_links = self.a_dim,
-                                        max_broken_links = self.max_broken_links,
-                                        failure_rate = self.failure_rate,
-                                        recovery_rate = self.recovery_rate)
-        state_list, test_stationary_distrib = get_state_distribution(
-                                n_links = self.a_dim,
-                                max_broken_links = self.max_broken_links,
-                                failure_rate = self.test_failure_rate,
-                                recovery_rate = self.test_recovery_rate)
+        # state_list, train_stationary_distrib = get_state_distribution(
+        #                                 n_links = self.a_dim,
+        #                                 max_broken_links = self.max_broken_links,
+        #                                 failure_rate = self.failure_rate,
+        #                                 recovery_rate = self.recovery_rate)
+        # state_list, test_stationary_distrib = get_state_distribution(
+        #                         n_links = self.a_dim,
+        #                         max_broken_links = self.max_broken_links,
+        #                         failure_rate = self.test_failure_rate,
+        #                         recovery_rate = self.test_recovery_rate)
 
         
         
@@ -416,31 +422,25 @@ class DDPGAgent:
             #     self.env.broken_links = [0,1]
 
             # get initial state probability
-            state_str = [0] * self.a_dim
-            for i in self.env.broken_links:
-                state_str[i] = 1
-            state_str = ''.join(map(str, state_str))
-            train_init_prob = train_stationary_distrib[state_list.index(state_str)]
-            test_init_prob = test_stationary_distrib[state_list.index(state_str)]
+            # state_str = [0] * self.a_dim
+            # for i in self.env.broken_links:
+            #     state_str[i] = 1
+            # state_str = ''.join(map(str, state_str))
+            # train_init_prob = train_stationary_distrib[state_list.index(state_str)]
+            # test_init_prob = test_stationary_distrib[state_list.index(state_str)]
 
-            print(f'state_str', state_str)
-            print(f'train_init_prob: {train_init_prob}')
-            print(f'test_init_prob: {test_init_prob}')
-            is_ratio = test_init_prob / train_init_prob
-            print(f'is_ratio: {is_ratio}')
+            # print(f'state_str', state_str)
+            # print(f'train_init_prob: {train_init_prob}')
+            # print(f'test_init_prob: {test_init_prob}')
+            # is_ratio = test_init_prob / train_init_prob
+            # print(f'is_ratio: {is_ratio}')
  
             for timestep in range(self.period):
                 for ministep in range(self.ministeps): # 3 mini steps in one episode
                     self.logger.write("====================total_step, timestep, ministep: ", self.total_step,timestep, ministep, "====================")
                     prob, prob_test = self.update_links()
-                    #self.logger.write('state probablity', prob)
-
-                    if timestep != 0 or ministep != 0:
-                        print(self.env.broken_links)
-                        print(f'prob: {prob}')
-                        print(f'prob_test: {prob_test}')
-                        is_ratio = prob_test / prob
-                        print(f'is_ratio: {is_ratio}')
+           
+                    is_ratio = prob_test / prob
                     
                     
                     self.logger.write('current state', state)
@@ -453,10 +453,11 @@ class DDPGAgent:
                 
                     if self.total_step <= 10000 and ministep == 0 and self.record_uniform:
                         next_state, reward, done, reward_uniform = self.step(action, require_uniform=True, next_traffic=False)
-                        reward_uniform = reward_uniform * (1 - np.power(self.gamma,3))/(1-self.gamma)
+                        reward_uniform = reward_uniform * (1 - np.power(self.gamma,self.ministeps))/(1-self.gamma)
                         score_uniform = reward_uniform + self.gamma * score_uniform
+                        score_uniform = score_uniform * is_ratio
                     else:
-                        next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic)
+                        next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic, is_ratio = is_ratio)
                     # else:
                     #     next_state, reward, done, _ = self.step(action, require_uniform=False)
 
@@ -505,34 +506,9 @@ class DDPGAgent:
                     30,
                 )
 
-            # collection = []
-            # for name in list(locals().keys()):
-            #     vs =  dir(eval(name))
-            #     if '__class__' in vs:
-            #         for v in vs:
-            #             if v[0] != "_":
-            #                 try:
-            #                     collection.append((v, sys.getsizeof(eval(name + "." + v))/1000000))
-            #                 except Exception as e:
-            #                     print(e)
-            #     else:
-            #         collection.append((name, sys.getsizeof(eval(name))/1000000))
-            # for name in list(globals().keys()):
-            #     vs =  dir(eval(name))
-            #     if '__class__' in vs:
-            #         for v in vs:
-            #             if v[0] != "_":
-            #                 try:
-            #                     collection.append((v, sys.getsizeof(eval(name + "." + v))/1000000))
-            #                 except Exception as e:
-            #                     print(e)
-            #     else:
-            #         collection.append((name, sys.getsizeof(eval(name))/1000000))
-            # print(f'====================== {self.total_step} ======================')
-            # print(list(sorted(collection, key=lambda x: x[1], reverse=True))[:20])
-
-            if self.total_step % 20 == 0:
+            if self.total_step % 100 == 0:
                 torch.save(self.actor.state_dict(), f"./experiments/{self.session_name}/actor_{self.total_step}.ckpt")
+                torch.save(self.critic.state_dict(), f"./experiments/{self.session_name}/critic_{self.total_step}.ckpt")
                 
 
 
@@ -559,9 +535,9 @@ class DDPGAgent:
             is_random = True
         else:
             self.actor.load_state_dict(torch.load(self.test_pretrained_model))
-        """Test the agent."""
-
         
+
+        """Test the agent."""
         self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}, period: {self.period}")
         self.env = Simulation(num_nodes=5, total_traffic=self.total_traffic, period=self.period, run_index=self.run_index)
         self.is_test = True
@@ -580,7 +556,7 @@ class DDPGAgent:
             for timestep in range(self.period):
                 for ministep in range(3): # 3 mini steps in one episode
                     self.logger.write("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
-                    prob = self.update_links()
+                    _ = self.update_links()
 
                     if is_random:
                         action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
@@ -606,16 +582,22 @@ class DDPGAgent:
             
 
             # plotting
-            self._plot(
-                self.total_step, 
-                scores, 
-                [],
-                [], 
-                [],
-                [],
-                30,
-            )
+
+            if self.total_step % 50 ==1:
+                self._plot(
+                    self.total_step, 
+                    scores, 
+                    [],
+                    [], 
+                    [],
+                    [],
+                    30,
+                )
         # testing loop ends .........#
+
+
+
+
     #@profile(stream=sys.stdout)
     def _plot(
         self, 
@@ -690,7 +672,7 @@ if __name__ == "__main__":
                 checkpoint = ""
                 for x in time.localtime()[:6]:
                     checkpoint += str(x) + "_"
-                same_seed(2023)
+                same_seed(2024)
                 session_name = checkpoint + "_" + name
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
@@ -700,7 +682,7 @@ if __name__ == "__main__":
                     "sample_size": 64,
                     "gamma": 0.9999,
                     "eps": 0.995, #0.987
-                    "initial_random_steps": 2 ,#64 + period * 20,
+                    "initial_random_steps": 64 ,#64 + period * 20,
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
@@ -715,7 +697,7 @@ if __name__ == "__main__":
                     "record_uniform": False,
                     "max_broken_links": 4,
                     "test_pretrained_model":"",
-                    "run_index":0,
+                    "run_index":2,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
