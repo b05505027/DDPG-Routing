@@ -168,6 +168,7 @@ class DDPGAgent:
         test_failure_rate: float = 0.01,
         test_recovery_rate: float = 0.1,
         ministeps: int = 3,
+        importance_sampling: bool = True,
         record_uniform: bool = False,
         max_broken_links: int = 0,
         test_pretrained_model: str = "",
@@ -196,11 +197,11 @@ class DDPGAgent:
         self.test_failure_rate = test_failure_rate
         self.test_recovery_rate = test_recovery_rate
         self.ministeps = ministeps
+        self.importance_sampling = importance_sampling
         self.record_uniform = record_uniform
         self.max_broken_links = max_broken_links
         self.test_pretrained_model = test_pretrained_model
         
-        self.logger = Logger("experiments/" + session_name + "/log.txt")
         self.run_index = run_index
         
 
@@ -343,7 +344,12 @@ class DDPGAgent:
         masks = 1 - done
         next_action = self.actor_target(next_state)
         next_value = self.critic_target(next_state, next_action)
-        curr_return = reward + self.gamma * is_ratio * next_value * masks
+
+        # old implementation
+        # curr_return = reward + self.gamma * is_ratio * next_value * masks
+        # new implementation
+
+        curr_return = is_ratio * (reward + self.gamma * next_value * masks)
         
 
         
@@ -385,6 +391,7 @@ class DDPGAgent:
     def train(self, max_steps: int, plotting_interval: int = 30):
         """Train the agent."""
         self.is_test = False
+        self.logger = Logger("experiments/" + session_name + "/log.txt")
 
         # get initial state distribution
         # state_list, train_stationary_distrib = get_state_distribution(
@@ -439,8 +446,12 @@ class DDPGAgent:
                 for ministep in range(self.ministeps): # 3 mini steps in one episode
                     self.logger.write("====================total_step, timestep, ministep: ", self.total_step,timestep, ministep, "====================")
                     prob, prob_test = self.update_links()
-           
-                    is_ratio = prob_test / prob
+
+
+                    if self.importance_sampling:
+                        is_ratio = prob_test / prob
+                    else:
+                        is_ratio = 1.0
                     
                     
                     self.logger.write('current state', state)
@@ -497,13 +508,12 @@ class DDPGAgent:
             # plotting
             if self.total_step % plotting_interval == 0:
                 self._plot(
-                    self.total_step, 
-                    scores, 
-                    scores_uniform,
-                    actor_losses, 
-                    critic_losses,
-                    exploration_rates,
-                    30,
+                    frame_idx = self.total_step, 
+                    scores = scores, 
+                    scores_uniform = scores_uniform,
+                    actor_losses = actor_losses, 
+                    critic_losses = critic_losses,
+                    exploration_rates = exploration_rates,
                 )
 
             if self.total_step % 100 == 0:
@@ -530,12 +540,15 @@ class DDPGAgent:
 
     def test(self, max_steps: int):
         """ load the pretrained model """
+        self.logger = Logger("experiments/" + session_name + "/log_test.txt")
         is_random = False
         if self.test_pretrained_model == "random":
             is_random = True
         else:
             self.actor.load_state_dict(torch.load(self.test_pretrained_model))
-        
+            self.actor = self.actor.to(self.device)
+            self.critic.load_state_dict(torch.load(self.test_pretrained_model.replace("actor", "critic")))
+            self.critic = self.critic.to(self.device)
 
         """Test the agent."""
         self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}, period: {self.period}")
@@ -543,56 +556,54 @@ class DDPGAgent:
         self.is_test = True
         self.total_step = 0
         
-        
-
 
         state = self.env.get_current_state()
         scores = []
+        rewards = []
+        q_values = []
         
+        with torch.no_grad():
+            # testing loop .........#
+            for self.total_step in tqdm(range(1, max_steps + 1)):
+                score = 0
+                for timestep in range(self.period):
+                    for ministep in range(3): # 3 mini steps in one episode
+                        self.logger.write("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
+                        _ = self.update_links()
 
-        # testing loop .........#
-        for self.total_step in tqdm(range(1, max_steps + 1)):
-            score = 0
-            for timestep in range(self.period):
-                for ministep in range(3): # 3 mini steps in one episode
-                    self.logger.write("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
-                    _ = self.update_links()
+                        if is_random:
+                            action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
+                        else:
+                            action = self.select_action(state.reshape(1,-1), 0)
+                        
+                        if ministep == 2:
+                            next_traffic = True
+                        else:
+                            next_traffic = False
 
-                    if is_random:
-                        action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
-                    else:
-                        action = self.select_action(state.reshape(1,-1), 0)
-                    
-                    if ministep == 2:
-                        next_traffic = True
-                    else:
-                        next_traffic = False
+                        next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic)
+                        rewards.append(reward)
+                        q_values.append(self.critic(torch.FloatTensor(state).to(self.device).reshape(1,-1), torch.FloatTensor(action).to(self.device).reshape(1,-1)).cpu().numpy().item())         
+                        state = next_state
+                        score  = reward + self.gamma * score
+                        
+                        self.logger.write('reward', reward)
+                        self.logger.write('score', score)
+                        self.logger.write('broken links', self.env.broken_links)
+                        self.logger.write('action', action.reshape(-1))
 
-                    next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic)
-                    state = next_state
-                    score  = reward + self.gamma * score
+                        if done:         
+                            scores.append(score)
                 
-                    self.logger.write('reward', reward)
-                    self.logger.write('score', score)
-                    self.logger.write('broken links', self.env.broken_links)
-                    self.logger.write('action', action.reshape(-1))
 
-                    if done:         
-                        scores.append(score)
-            
-
-            # plotting
-
-            if self.total_step % 50 ==1:
-                self._plot(
-                    self.total_step, 
-                    scores, 
-                    [],
-                    [], 
-                    [],
-                    [],
-                    30,
-                )
+                # plotting
+                if self.total_step % 10 ==1:
+                    self._plot(
+                        frame_idx = self.total_step, 
+                        scores = scores, 
+                        rewards = rewards,
+                        q_values = q_values,
+                    )
         # testing loop ends .........#
 
 
@@ -602,25 +613,15 @@ class DDPGAgent:
     def _plot(
         self, 
         frame_idx: int, 
-        scores: List[float],
-        scores_uniform: List[float], 
-        actor_losses: List[float], 
-        critic_losses: List[float], 
-        exploration_rates: List[float],
-        smoothing: int
+        scores: List[float] = [],
+        scores_uniform: List[float] = [], 
+        actor_losses: List[float] = [], 
+        critic_losses: List[float] = [], 
+        exploration_rates: List[float] = [],
+        rewards: List[float]= [],
+        q_values: List[float]= [],
     ):
-
-        if smoothing < 20:
-            smoothing = 10
-        """Plot the training progresses."""
-        def subplot(loc: int, title: str, values: List[float], color: str, legend: str):
-            plt.subplot(loc)
-            plt.title(title)
-            plt.plot(np.convolve(values, np.ones(smoothing)/smoothing, mode='valid'), color=color, linewidth=0.5, label=legend)
-            plt.plot(np.ones(len(values)) * np.mean(values), "--", color=color)
-            if legend:
-                plt.legend()
-
+        """ Colors for plotting """
         CB91_Blue = '#2CBDFE'
         CB91_Green = '#47DBCD'
         CB91_Pink = '#F3A0F2'
@@ -629,40 +630,71 @@ class DDPGAgent:
         CB91_Amber = '#F5B14C'
         CB91_Grey = '#BDBDBD'
 
+        """Plot the training progresses."""
+        def subplot(loc: int, title: str, values: List[float], color: str, legend: str, smoothing: int):
+            if len(values) == 0:
+                return
+            plt.subplot(loc)
+            plt.title(title)
+            plt.plot(np.convolve(values, np.ones(smoothing)/smoothing, mode='valid'), color=color, linewidth=0.5, label=legend)
+            plt.plot(np.ones(len(values)) * np.mean(values), "--", color=color)
+            if legend:
+                plt.legend()
+     
+        """ Preprocess q values """
+        if q_values and rewards:
+            q_values = (np.array(q_values) * 3).tolist()
+            ''' Group rewards every 15 items, 
+                and change the ith value in the group into 
+                the sum over the ith to 15th value in the group.'''
+            true_q_values = []
+            for i in range(0, len(rewards), 15):
+                true_q_values.extend([sum(rewards[i+j:i+15]) for j in range(15)])
+            """ check for validity """
+            assert len(true_q_values) == len(q_values)
+        else:
+            true_q_values = []
+            q_values = []
+
+
+        """ dump raw values"""
+        if self.is_test:
+            json.dump(scores, open(f"./experiments/{self.session_name}/scores_test.json", "w"))
+            json.dump(true_q_values, open(f"./experiments/{self.session_name}/true_q_values_test.json", "w"))
+            json.dump(q_values, open(f"./experiments/{self.session_name}/q_values_test.json", "w"))
+            json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform_test.json", "w"))
+        else:
+            json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
+            json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
+
         if self.is_test:
             first_title = self.test_pretrained_model
         else:
             first_title = "DDPG"
         subplot_params = [
-            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, first_title),
-            (131, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform"),
-            (132, "actor_loss", actor_losses, CB91_Pink, None),
-            (133, "critic_loss", critic_losses, CB91_Purple,None),
+            [141, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, first_title, 20],
+            [141, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform", 20],
+            [142, "actor_loss", actor_losses, CB91_Pink, None, 20],
+            [143, "critic_loss", critic_losses, CB91_Purple,None, 20],
+            [144, f"predicted and true Q values", true_q_values, CB91_Violet, "true_q_value", 20],
+            [144, f"predicted and true Q values", q_values, CB91_Amber, "predicted_q_values", 20],
         ]
-
-        if self.is_test:
-            json.dump(scores, open(f"./experiments/{self.session_name}/scores_test.json", "w"))
-        else:
-            json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
-        if len(scores_uniform) > 0:
-            if self.is_test:
-                json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform_test.json", "w"))
-            else:
-                json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
         plt.close('all')
         plt.figure(figsize=(30, 5))
-        for loc, title, values, color, legend in subplot_params:
-            if len(values) > 0:
-             subplot(loc, title, values, color, legend)
-        
+        for parameters in subplot_params:
+            subplot(*parameters)
+
+        # additional plot for exploration rate
         if not self.is_test:
-            plt.subplot(131)
+            plt.subplot(141)
             plt.twinx().plot(exploration_rates, "--", color='#F2BFC8')
+
         if self.is_test:
             plt.savefig(f"./experiments/{self.session_name}/plot_test.png")
         else:
             plt.savefig(f"./experiments/{self.session_name}/plot.png")
         plt.clf() 
+
 if __name__ == "__main__":
     
     name = names.get_full_name()
@@ -672,8 +704,7 @@ if __name__ == "__main__":
                 checkpoint = ""
                 for x in time.localtime()[:6]:
                     checkpoint += str(x) + "_"
-                same_seed(2024)
-                session_name = checkpoint + "_" + name
+                session_name = checkpoint + "_newis_" + name
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
                     "s_dim": 14,
@@ -681,28 +712,34 @@ if __name__ == "__main__":
                     "buffers_size": 4096,
                     "sample_size": 64,
                     "gamma": 0.9999,
-                    "eps": 0.995, #0.987
-                    "initial_random_steps": 64 ,#64 + period * 20,
+                    "eps": 0.9992, #0.995 -> 0.9992 six times longer
+                    "initial_random_steps": 1000 ,#64 -> 1000
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
-                    "failure_rate":0.01, #0.01,
-                    "recovery_rate":0.1, #0.1,
+                    "failure_rate":0.038, #0.01,
+                    "recovery_rate":0.068, #0.1,
                     "test_failure_rate":0.001,
                     "test_recovery_rate":0.1,
                     "ministeps": 1, #3,
+                    "importance_sampling": True,
                     "record_uniform": False,
                     "max_broken_links": 4,
-                    "test_pretrained_model":"",
+                    "test_pretrained_model":f"experiments/{session_name}/actor_10000.ckpt",
                     "run_index":2,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
+
+                same_seed(2023)
                 agent = DDPGAgent(**config)
                 agent.train(max_steps=10000)
+                same_seed(2024)
+                agent = DDPGAgent(**config)
+                agent.test(max_steps=1000)
                 exit(0)
 
                 # problems of generating same actions for all states

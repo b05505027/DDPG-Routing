@@ -59,16 +59,19 @@ def get_state_distribution(n_links, max_broken_links, failure_rate, recovery_rat
                         transition_matrix[i][j] *= 1 - recovery_rate
                 else:
                     if states[i][k] == "0":
-                        transition_matrix[i][j] *= failure_rate
-                    else:
                         transition_matrix[i][j] *= recovery_rate
+                    else:
+                        transition_matrix[i][j] *= failure_rate
     for i in range(len(states)):
         states[i] = states[i].zfill(n_links)[::-1]
 
     # transpose it to get the right order
-    transition_matrix = transition_matrix.T
+    transition_matrix = transition_matrix
     eigenvals, eigenvects = np.linalg.eig(transition_matrix)
-
+    
+    # print('transition_matrix', transition_matrix)
+    # print('eigenvals', eigenvals)
+    # print('eigenvects', eigenvects)
     '''
     Find the indexes of the eigenvalues that are close to one.
     Use them to select the target eigen vectors. Flatten the result.
@@ -79,7 +82,7 @@ def get_state_distribution(n_links, max_broken_links, failure_rate, recovery_rat
     # Turn the eigenvector elements into probabilites
     stationary_distrib = target_eigenvect / sum(target_eigenvect) 
 
-    return states, stationary_distrib
+    return states, stationary_distrib, transition_matrix.T
 
 
 
