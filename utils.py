@@ -96,156 +96,109 @@ class Logger:
             f.write(message + '\n')
 
 class Simulation:
-    def __init__(self, num_nodes, total_traffic, period, run_index):
+    def __init__(self, num_nodes, total_traffic, period, run_index, failure_rate=0.1, recovery_rate=0.1, test_failure_rate=0.1, test_recovery_rate=0.1, max_broken_links=7):
         self.omnet_init()
         self.num_nodes = num_nodes
         self.total_traffic = total_traffic
-        self.static_traffic = False
         self.period = period
         self.periodic_index = 0
         self.broken_links = []
         self.run_index = run_index
+        self.failure_rate=failure_rate
+        self.recovery_rate=recovery_rate
+        self.test_failure_rate=test_failure_rate
+        self.test_recovery_rate=test_recovery_rate
+        self.max_broken_links=max_broken_links
 
-        
 
-        # create a modeling graph
-        self.edges = [
-            (1, 3, {"weight": 0, "traffic": 0, "index": 1}),
-            (1, 2, {"weight": 0, "traffic": 0, "index": 2}),
-            (2, 4, {"weight": 0, "traffic": 0, "index": 3}),
-            (3, 4, {"weight": 0, "traffic": 0, "index": 4}),
-            (3, 5, {"weight": 0, "traffic": 0, "index": 5}),
-            (4, 5, {"weight": 0, "traffic": 0, "index": 6}),
-            (2, 3, {"weight": 0, "traffic": 0, "index": 7}),
+
+        # create ports
+        # self.ports = [
+        #     ("node1.ethg[0]", "node3.ethg[0]"),
+        #     ("node1.ethg[1]", "node2.ethg[0]"),
+        #     ("node2.ethg[1]", "node4.ethg[0]"),
+        #     ("node3.ethg[1]", "node4.ethg[1]"),
+        #     ("node3.ethg[2]", "node5.ethg[0]"),
+        #     ("node4.ethg[2]", "node5.ethg[1]"),
+        #     ("node2.ethg[2]", "node3.ethg[3]"),
+        # ]
+        self.ports = [
+            ((1,0), (3,0)), 
+            ((1,1), (2,0)),
+            ((2,1), (4,0)),
+            ((3,1), (4,1)),
+            ((3,2), (5,0)),
+            ((4,2), (5,1)),
+            ((2,2), (3,3)),
         ]
-        self.G = nx.Graph()
-        for i in range(1, self.num_nodes):
-            self.G.add_node(i)
-        self.G.add_edges_from(self.edges)
-
-        # generate traffics and states
-        if self.period:
-            self.periodic_traffics = self.generate_periodic_traffics()
-            self.current_traffic = self.get_periodic_traffic()
-            self.current_state = self.generate_state(None, self.current_traffic)
-            self.new_traffic = self.get_periodic_traffic()
-        else:
-            # current new traffic
-            self.current_traffic = self.generate_traffic()
-            self.current_state = self.generate_state(None, self.current_traffic)
-            # dummy new traffic
-            self.new_traffic = self.generate_traffic(None, self.new_traffic)
+        
+        # generate traffics
+        self.periodic_traffics = self.generate_periodic_traffics()
+        self.current_traffic = self.get_periodic_traffic()
+        self.new_traffic = self.get_periodic_traffic()
+    
+        
 
     def quantize_traffic(self, traffic):
         traffic = traffic / self.total_traffic
-        # if traffic <= 0.1:
-        #     return 1
-        # elif traffic <= 0.2:
-        #     return 2
-        # elif traffic <= 0.3:
-        #     return 3
-        # else:
-        #     return 4
         return traffic
-    def update_graph(self):
-        self.G.remove_edges_from(list(self.G.edges()))
-        self.G.add_edges_from(list(filter(lambda x: x[2]['index']-1 not in self.broken_links, self.edges)))
-    '''
-        Generate the specific state (traffics on each edges) 
-        according to the weights (action) and the current traffic
-    '''
-    def generate_state(self, weights, traffic_matrix):
-        # check if any link is broken
-        self.update_graph()
-        
-        if weights is None:
-            weights = np.ones(7)
-        # reshape the traffic matrix to (num_nodes x num_nodes)
-        traffic_matrix = traffic_matrix.reshape(self.num_nodes,-1)
 
-        # initialize the graph
-        self.rebuild_graph()
-
-        # set weights
-        for edge in self.G.edges.data():
-            index = edge[2]['index'] - 1
-            edge[2]['weight'] = weights[index]
-    
-        # calculate the shortest paths
-        shortest_paths = nx.shortest_path(self.G,  weight="weight")
-
-
-        # for item in shortest_paths.items():
-        #     print(item)
-        # input()
-
-
-        for source in range(self.num_nodes):
-            source = source + 1
-            paths = shortest_paths[source] # the shortest paths from source to all other reachable nodes
-            for destination in paths.keys():
-                path = paths[destination]
-                for i in range(len(path)-1):
-                    self.G.edges[path[i], path[i+1]]['traffic'] += traffic_matrix[source-1, destination-1]
-    
-        traffic_state = np.zeros(7, dtype=float)
-        failure_state = np.zeros(7, dtype=float)
-
-        
-        for edge in self.G.edges.data():
-            index = edge[2]['index'] - 1
-            traffic_state[index] = self.quantize_traffic(edge[2]['traffic'])
-            self.quantize_traffic(edge[2]['traffic'])
-        for index in self.broken_links:
-            failure_state[index] = 1
-        new_state = np.concatenate((traffic_state, failure_state), axis=0)
-        new_state = new_state.reshape(1, -1)
-        #print('new state', new_state)
-        return new_state
-
-
-    def rebuild_graph(self):
-        nx.set_edge_attributes(self.G, 0, 'traffic')
-        nx.set_edge_attributes(self.G, 0, 'weight')
     
     def step(self, action, next_traffic = False):
+
         weights = self.action_transform(action)
 
-        #print('current traffic', self.current_traffic)
         self.apply_weights(weights)
         self.apply_traffic(self.current_traffic)
         self.apply_broken_links()
         self.run_simulation()
 
-
-        #for i in range(100000):
-        delay, lossrate = self.analyze_qos()
-
-        #print('delay_reward:', self.delay_reward(delay))
-        #print('lossrate_reward:', 0.2*self.lossrate_reward(lossrate))
-        # input()
+        delay, lossrate, link_traffiics = self.analyze_qos()
+        link_traffiics = link_traffiics.reshape(1, -1)
         reward = 1*self.delay_reward(delay) + 0.5*self.lossrate_reward(lossrate)
 
-        # renew states
+        # update the current traffic if next_traffic is True
         if next_traffic:
-            # if we choose to use the next traffic, weights are initialized to None
-            # to generate the next traffic. Otherwise, we use the current weights.
-            weights = None
             self.current_traffic = self.new_traffic
             self.new_traffic = self.generate_traffic()
-            if self.periodic_index % self.period == 2:
-                done = 1
-            else:
-                done = 0
+
+        return link_traffiics, reward
+    
+
+    def update_links(self, is_test):
+        broken_links = []
+        probability = 1
+        probability_test = 1
+
+        if is_test:
+            failure_rate = self.test_failure_rate
+            recovery_rate = self.test_recovery_rate
         else:
-            done = 0
+            failure_rate = self.failure_rate
+            recovery_rate = self.recovery_rate
 
-        self.current_state = self.generate_state(weights, self.current_traffic)
         
-        return self.current_state, reward, done 
-
-    def get_current_state(self):
-        return self.current_state
+        for i in range(self.max_broken_links):
+            if i in self.broken_links: # currently broken
+                if np.random.random() < recovery_rate: # will recover
+                    probability *= recovery_rate
+                    probability_test *= self.test_recovery_rate
+                    continue
+                else: # still broken
+                    broken_links.append(i)
+                    probability *= (1 - recovery_rate)
+                    probability_test *= (1 - self.test_recovery_rate)
+            else: # currently good
+                if np.random.random() < failure_rate: # will break
+                    broken_links.append(i)
+                    probability *= (failure_rate)
+                    probability_test *= (self.test_failure_rate)
+                else: # still good
+                    probability *= (1 - failure_rate)
+                    probability_test *= (1 - self.test_failure_rate)
+                    continue
+        self.broken_links = broken_links
+        return probability, probability_test
 
 
     def generate_traffic(self):
@@ -260,7 +213,9 @@ class Simulation:
     
     def generate_periodic_traffics(self):
         traffics = []
-        for i in range(self.period):
+        # the first traffic is used for state initialization
+        # so we need totally self.period + 1 traffics
+        for i in range(self.period + 1): 
             random_vector = np.random.exponential(10, size=(self.num_nodes))
             traffic = random_vector * random_vector.reshape(-1, 1)
             traffic = traffic / np.sum(traffic) * self.total_traffic + 1
@@ -270,7 +225,7 @@ class Simulation:
     
     def get_periodic_traffic(self):
         if self.periodic_index % self.period != 0:
-            update_rate = 0.3 + np.random.rand() * 0.1
+            update_rate = 0.1 + np.random.rand() * 0.2
             traffic = update_rate * self.periodic_traffics[self.periodic_index % self.period] + (1-update_rate) * self.current_traffic
         else:
             traffic = self.periodic_traffics[0]
@@ -278,9 +233,6 @@ class Simulation:
         return traffic
 
 
-
-    
-        
     # lossrate reward functino
     def lossrate_reward(self, lossrate):
         return -5*np.tanh(3*lossrate)
@@ -392,10 +344,39 @@ class Simulation:
        'count', 'sumweights', 'mean', 'stddev', 'min', 'max', 'underflows',
        'overflows', 'binedges', 'binvalues']'''
         df = pd.read_csv("scalars.csv")[['module', 'name','value']]
-        df_total = df.query("name=='incomingPackets:count' & value.notna()")
+
+
+        # analyze the traffic on each link
+        df_outgoing = df.query("name=='outgoingPackets:count' & value.notna()")
+        data_outgoing = df_outgoing.to_dict('records')
+
+        link_traffics = [0] * len(self.ports)
+        for data in data_outgoing:
+            outgoing_packets = int(data['value'])
+            module = data['module']
+            source = int(module.split('.')[1][4:])
+            port = int(module.split('.')[2][-2:-1])
+
+            
+            # print('source, port', source, port)
+            # print('name', data['module'])
+            # print('total_packets', outgoing_packets)
+            for i in range(len(self.ports)):
+                # print('self.ports[i]', self.ports[i])
+                # print('(socure, port)', (source, port))
+                if (source, port) in self.ports[i]:
+                    #print('contribution to link', i, outgoing_packets)
+                    link_traffics[i] += outgoing_packets
+        link_traffics = np.array(link_traffics)
+        # normalize the link traffics
+        link_traffics = link_traffics / np.sum(link_traffics)
+        #print('link_traffics', link_traffics)
+
+        # analyze packet-drop rate
+        #df_total = df.query("name=='incomingPackets:count' & value.notna()")
         df_lost_drop = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
         df_lost_down = df.query("name=='packetDropInterfaceDown:count' & value.notna()")
-   
+        df_total = df.query("name=='incomingPackets:count' & value.notna()")
         
         data_total = df_total.to_dict('records')
         data_lost_drop = df_lost_drop.to_dict('records')
@@ -408,7 +389,7 @@ class Simulation:
 
 
             lost_packets = int(scalar[1]['value']) + int(scalar[2]['value'])
-            #print('name', scalar[0]['module'])
+            # print('name', scalar[0]['module'])
             # print('total_packets', total_packets)
             # print('drop', scalar[1]['value'])
             # print('down', scalar[2]['value'])
@@ -425,7 +406,7 @@ class Simulation:
 
 
         os.chdir(configs[self.run_index]['project_path'])
-        return avg_delay, avg_lossrate
+        return avg_delay, avg_lossrate, link_traffics
 
 
     # applying link weights
@@ -450,21 +431,21 @@ class Simulation:
             "disconnected": " <--> Eth10M {  disabled = true; } <--> ",
         }
 
-        ports = [
-            ("node1.ethg[0]", "node3.ethg[0]"),
-            ("node1.ethg[1]", "node2.ethg[0]"),
-            ("node2.ethg[1]", "node4.ethg[0]"),
-            ("node3.ethg[1]", "node4.ethg[1]"),
-            ("node3.ethg[2]", "node5.ethg[0]"),
-            ("node4.ethg[2]", "node5.ethg[1]"),
-            ("node2.ethg[2]", "node3.ethg[3]"),
-        ]
+        
         
         connection_strings = []
+
+        # mapping self.ports to the string format like ("node1.ethg[0]", "node3.ethg[0]")
+        port_strings = list(map(lambda x: (f"node{x[0][0]}.ethg[{x[0][1]}]", f"node{x[1][0]}.ethg[{x[1][1]}]"), self.ports))
+
+
+
+
+
         for i in range(7):
-            connection_strings.append("        " + ports[i][0] + links["connected"] + ports[i][1] + ";\n")
+            connection_strings.append("        " + port_strings[i][0] + links["connected"] + port_strings[i][1] + ";\n")
         for j in self.broken_links:
-            connection_strings[j] = "        " + ports[j][0] + links["disconnected"] + ports[j][1] + ";\n"
+            connection_strings[j] = "        " + port_strings[j][0] + links["disconnected"] + port_strings[j][1] + ";\n"
 
         connection_string = "".join(connection_strings)
         #print(connection_string)
@@ -472,7 +453,6 @@ class Simulation:
         ned_template = ned_template.replace("<CONNECTIONS>", connection_string)
         with open(ned_path, 'w') as f:
             f.write(ned_template)
-        
         
 
     def apply_traffic(self, traffic):

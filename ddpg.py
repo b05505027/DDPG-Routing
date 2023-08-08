@@ -178,7 +178,16 @@ class DDPGAgent:
 
 
         """Initialize."""
-        self.env = Simulation(num_nodes=5, total_traffic=total_traffic, period=period, run_index=run_index)
+        self.env = Simulation(num_nodes=5, 
+                            total_traffic=total_traffic, 
+                            period=period, 
+                            run_index=run_index, 
+                            failure_rate=failure_rate,
+                            recovery_rate=recovery_rate,
+                            test_failure_rate=test_failure_rate,
+                            test_recovery_rate=test_recovery_rate,
+                            max_broken_links=max_broken_links,)
+
         self.a_dim = a_dim
         self.s_dim = s_dim
         self.buffer = ReplayBuffer(s_dim =s_dim, a_dim=a_dim, max_size=buffers_size, sample_size=sample_size)
@@ -192,14 +201,16 @@ class DDPGAgent:
         self.critic_lr = critic_lr
         self.session_name = session_name
         self.period = period
-        self.failure_rate = failure_rate
-        self.recovery_rate = recovery_rate
-        self.test_failure_rate = test_failure_rate
-        self.test_recovery_rate = test_recovery_rate
+
+
+
+
+       
+
+
         self.ministeps = ministeps
         self.importance_sampling = importance_sampling
         self.record_uniform = record_uniform
-        self.max_broken_links = max_broken_links
         self.test_pretrained_model = test_pretrained_model
         
         self.run_index = run_index
@@ -237,83 +248,49 @@ class DDPGAgent:
         self.initial_random_steps = initial_random_steps
     
     
-    def select_action(self, state: np.ndarray, exploration_rate: float) -> np.ndarray:
-        """Select an action from the input state."""
-        # if initial random action should be conducted
+    def select_action(self, state: np.ndarray, exploration_rate: float, store_transition: float) -> np.ndarray:
+        # take random actions in the beginning
         if self.total_step < self.initial_random_steps and not self.is_test:
             selected_action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
         else:
-            selected_action = self.actor(
-                torch.FloatTensor(state).to(self.device)
-            ).detach().cpu().numpy()
+            selected_action = self.actor(torch.FloatTensor(state).to(self.device)).detach().cpu().numpy()
         
         # adding noise
         if not self.is_test:
-            # using beta distribution as noise
+            # using the beta distribution as noise
             noise = exploration_rate*(np.random.beta(0.5, 0.5, size=self.a_dim) - 0.5).reshape(1, -1)
-            #self.logger.write('noise', noise)
             selected_action = np.clip(selected_action + noise, -1.0, 1.0)
-            #self.logger.write('selected_action', selected_action)
         
-        self.transition = [state.reshape(-1), selected_action.reshape(-1)] # (s, a,)
+        if store_transition:
+            self.transition = [state.reshape(-1), selected_action.reshape(-1)] # (s, a,)
         return selected_action
     
     #@profile(stream=sys.stdout)
-    def step(self, action: np.ndarray, require_uniform, next_traffic, is_ratio = 1.0) -> Tuple[np.ndarray, np.float64, bool]:
-        """Take an action and return the response of the env."""
-        if require_uniform:
-            _, reward_uniform, done  = self.env.step(np.ones(self.a_dim, dtype=float), next_traffic=False)
+    def step(self, action: np.ndarray, next_traffic: np.ndarray, is_done: bool = False, store_transition: bool=True) -> Tuple[np.ndarray, float]:
+        
+        # during the timeslot, get the current reward and traffic load for each link,
+        # which is used to calculate the next state
+        link_traffics, reward  = self.env.step(action, next_traffic=next_traffic)
+
+        # update and observe link conditions, get the ratio for importance sampling
+        prob, prob_test = self.env.update_links(self.is_test)
+        if self.importance_sampling:
+            is_ratio = prob_test / prob
         else:
-            reward_uniform = None
+            is_ratio = 1.0
 
-        next_state, reward, done  = self.env.step(action, next_traffic=next_traffic)
-
-
-        if not self.is_test:
-            self.transition += [reward, next_state.reshape(-1), is_ratio, done] # (s, a, r, s', is_ratio, done)
+        # synthesize the new state
+        failure_state = np.zeros(7, dtype=float).reshape(1,-1)
+        for index in self.env.broken_links:
+            failure_state[0][index] = 1
+        next_state = np.concatenate((link_traffics, failure_state), axis=1)
+        
+        # store the transition in memory
+        if store_transition:
+            self.transition += [reward, next_state.reshape(-1), is_ratio, is_done] # (s, a, r, s', is_ratio, done)
             self.buffer.store(*self.transition)
 
-        return next_state, reward, done, reward_uniform
-
-    def update_links(self):
-        broken_links = []
-        probability = 1
-        probability_test = 1
-
-        if self.is_test:
-            failure_rate = self.test_failure_rate
-            recovery_rate = self.test_recovery_rate
-        else:
-            failure_rate = self.failure_rate
-            recovery_rate = self.recovery_rate
-
-        self.logger.write('failure_rate', failure_rate)
-        self.logger.write('recovery_rate', recovery_rate)
-        
-        for i in range(self.max_broken_links):
-            if i in self.env.broken_links: # currently broken
-                if np.random.random() < recovery_rate: # will recover
-                    probability *= recovery_rate
-                    probability_test *= self.test_recovery_rate
-                    continue
-                else: # still broken
-                    broken_links.append(i)
-                    probability *= (1 - recovery_rate)
-                    probability_test *= (1 - self.test_recovery_rate)
-            else: # currently good
-                if np.random.random() < failure_rate: # will break
-                    broken_links.append(i)
-                    probability *= (failure_rate)
-                    probability_test *= (self.test_failure_rate)
-                else: # still good
-                    probability *= (1 - failure_rate)
-                    probability_test *= (1 - self.test_failure_rate)
-                    continue
-
-        self.env.broken_links = broken_links
-
-        return probability, probability_test
-
+        return next_state, reward
 
 
 
@@ -393,22 +370,7 @@ class DDPGAgent:
         self.is_test = False
         self.logger = Logger("experiments/" + session_name + "/log.txt")
 
-        # get initial state distribution
-        # state_list, train_stationary_distrib = get_state_distribution(
-        #                                 n_links = self.a_dim,
-        #                                 max_broken_links = self.max_broken_links,
-        #                                 failure_rate = self.failure_rate,
-        #                                 recovery_rate = self.recovery_rate)
-        # state_list, test_stationary_distrib = get_state_distribution(
-        #                         n_links = self.a_dim,
-        #                         max_broken_links = self.max_broken_links,
-        #                         failure_rate = self.test_failure_rate,
-        #                         recovery_rate = self.test_recovery_rate)
-
-        
-        
-        state = self.env.get_current_state()
-
+        # initialization
         actor_losses = []
         critic_losses = []
         scores = []
@@ -416,85 +378,48 @@ class DDPGAgent:
         exploration_rates = []
         link_failure_times = []
         
+        # start interacting with the environment
         for self.total_step in tqdm(range(1, max_steps + 1)):
             
-
+            # calculate current exploration rate
             exploration_rate = np.power(self.eps, self.total_step)
             exploration_rates.append(exploration_rate)
-
+            
+            # in the beginning of each episode, reset the score
             score = 0
             score_uniform = 0
-
-            # if self.total_step == 500:
-            #     self.env.broken_links = [0,1]
-
-            # get initial state probability
-            # state_str = [0] * self.a_dim
-            # for i in self.env.broken_links:
-            #     state_str[i] = 1
-            # state_str = ''.join(map(str, state_str))
-            # train_init_prob = train_stationary_distrib[state_list.index(state_str)]
-            # test_init_prob = test_stationary_distrib[state_list.index(state_str)]
-
-            # print(f'state_str', state_str)
-            # print(f'train_init_prob: {train_init_prob}')
-            # print(f'test_init_prob: {test_init_prob}')
-            # is_ratio = test_init_prob / train_init_prob
-            # print(f'is_ratio: {is_ratio}')
- 
-            for timestep in range(self.period):
-                for ministep in range(self.ministeps): # 3 mini steps in one episode
-                    self.logger.write("====================total_step, timestep, ministep: ", self.total_step,timestep, ministep, "====================")
-                    prob, prob_test = self.update_links()
-
-
-                    if self.importance_sampling:
-                        is_ratio = prob_test / prob
-                    else:
-                        is_ratio = 1.0
-                    
-                    
-                    self.logger.write('current state', state)
-                    action = self.select_action(state.reshape(1,-1), exploration_rate)
-                    
-                    if ministep == self.ministeps - 1:
-                        next_traffic = True
-                    else:
-                        next_traffic = False
                 
-                    if self.total_step <= 10000 and ministep == 0 and self.record_uniform:
-                        next_state, reward, done, reward_uniform = self.step(action, require_uniform=True, next_traffic=False)
-                        reward_uniform = reward_uniform * (1 - np.power(self.gamma,self.ministeps))/(1-self.gamma)
-                        score_uniform = reward_uniform + self.gamma * score_uniform
-                        score_uniform = score_uniform * is_ratio
-                    else:
-                        next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic, is_ratio = is_ratio)
-                    # else:
-                    #     next_state, reward, done, _ = self.step(action, require_uniform=False)
+            # before the episode starts, we generate a new state using OSPF
+            state = None
+            next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_traffic=True, is_done=False, store_transition=False)
 
+            for timestep in range(1, self.period + 1):
+                    self.logger.write("==================== episode {} timestep {} ====================".format(self.total_step, timestep))
+                    # check if it's the last step
+                    done = False if timestep < self.period else True
+                    
+                    # get and store the new action (s, a)
                     state = next_state
+                    action = self.select_action(state, exploration_rate, store_transition=True)
+                    # get and store the new state(r, s'), plus, update link conditions in the environment
+                    next_state, reward = self.step(action,next_traffic=True, is_done=done, store_transition=True)
+
+                    # update the score (G)
                     score  = reward + self.gamma * score
                 
-                    #self.logger.write('reward', reward)
-                    #self.logger.write('reward uniform', reward_uniform)
-                    self.logger.write('score', score)
-                    # self.logger.write('score_uniform', score_uniform)
+                    # logging (s, a, r, s')
+                    self.logger.write(f'current state {str(state.reshape(-1)):<20}') # (s, )
+                    self.logger.write(f'current action, {str(action.reshape(-1)):<20}') # (a, )
+                    self.logger.write(f'current reward, {str(reward):<20}') # (r, )
+                    self.logger.write(f'next state, {str(next_state.reshape(-1)):<20}') # (s', )
+
+                    # logging (other information)
+                    self.logger.write('score', score) # return (G)
                     self.logger.write(f'broken links: {str(self.env.broken_links):<20}')
-                    self.logger.write(f'action:{str(action.reshape(-1)):<20}')
-                    #self.logger.write('done', done)
-                    #self.logger.write('length of scores_uniform', len(scores_uniform))
 
-                    # if episode ends
-                    if done:         
-                        # state = self.env.get_current_state()
+                    # if the episode ends
+                    if done:
                         scores.append(score)
-
-                        if self.total_step <= 10000 and self.record_uniform:
-                            scores_uniform.append(score_uniform)
-
-                        #self.logger.write(scores)
-                        #self.logger.write(scores_uniform)
-                    #self.logger.write("============================================================")
 
             # if training is ready
             if (
@@ -700,7 +625,7 @@ if __name__ == "__main__":
     name = names.get_full_name()
     for actor_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
         for critic_lr in [3e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
-            for period in [5, 10, 20, 30, 40, 50, 100, 150]:
+            for period in [10, 20, 30, 40, 50, 100, 150]:
                 checkpoint = ""
                 for x in time.localtime()[:6]:
                     checkpoint += str(x) + "_"
@@ -713,23 +638,23 @@ if __name__ == "__main__":
                     "sample_size": 64,
                     "gamma": 0.9999,
                     "eps": 0.9992, #0.995 -> 0.9992 six times longer
-                    "initial_random_steps": 1000 ,#64 -> 1000
+                    "initial_random_steps": 64 ,#64 -> 1000
                     "total_traffic": 300,
                     "period": period,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
-                    "failure_rate":0.038, #0.01,
-                    "recovery_rate":0.068, #0.1,
+                    "failure_rate":0.001, #0.01,
+                    "recovery_rate":0.1, #0.1,
                     "test_failure_rate":0.001,
                     "test_recovery_rate":0.1,
                     "ministeps": 1, #3,
-                    "importance_sampling": True,
+                    "importance_sampling": False,
                     "record_uniform": False,
                     "max_broken_links": 4,
                     "test_pretrained_model":f"experiments/{session_name}/actor_10000.ckpt",
-                    "run_index":2,
+                    "run_index":0,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
