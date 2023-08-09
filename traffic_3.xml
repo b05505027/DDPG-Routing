@@ -1,37 +1,37 @@
 <config> 
 	<source node="1">
-    <destination node="1" traffic="7" />
-    <destination node="2" traffic="15" />
-    <destination node="3" traffic="11" />
-    <destination node="4" traffic="4" />
-    <destination node="5" traffic="5" />
+    <destination node="1" traffic="36" />
+    <destination node="2" traffic="49" />
+    <destination node="3" traffic="9" />
+    <destination node="4" traffic="2" />
+    <destination node="5" traffic="10" />
  	</source>
   <source node="2">
-    <destination node="1" traffic="15" />
-    <destination node="2" traffic="75" />
-    <destination node="3" traffic="31" />
-    <destination node="4" traffic="6" />
-    <destination node="5" traffic="7" />
+    <destination node="1" traffic="49" />
+    <destination node="2" traffic="66" />
+    <destination node="3" traffic="12" />
+    <destination node="4" traffic="3" />
+    <destination node="5" traffic="13" />
  	</source>
   <source node="3">
-    <destination node="1" traffic="11" />
-    <destination node="2" traffic="31" />
-    <destination node="3" traffic="22" />
-    <destination node="4" traffic="7" />
-    <destination node="5" traffic="9" />
+    <destination node="1" traffic="9" />
+    <destination node="2" traffic="12" />
+    <destination node="3" traffic="2" />
+    <destination node="4" traffic="1" />
+    <destination node="5" traffic="3" />
  	</source>
   <source node="4">
-    <destination node="1" traffic="4" />
-    <destination node="2" traffic="6" />
-    <destination node="3" traffic="7" />
-    <destination node="4" traffic="4" />
-    <destination node="5" traffic="4" />
+    <destination node="1" traffic="2" />
+    <destination node="2" traffic="3" />
+    <destination node="3" traffic="1" />
+    <destination node="4" traffic="1" />
+    <destination node="5" traffic="1" />
  	</source>
   <source node="5">
-    <destination node="1" traffic="5" />
-    <destination node="2" traffic="7" />
-    <destination node="3" traffic="9" />
-    <destination node="4" traffic="4" />
-    <destination node="5" traffic="5" />
+    <destination node="1" traffic="10" />
+    <destination node="2" traffic="13" />
+    <destination node="3" traffic="3" />
+    <destination node="4" traffic="1" />
+    <destination node="5" traffic="3" />
  	</source>
  </config>

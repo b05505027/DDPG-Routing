@@ -477,60 +477,87 @@ class DDPGAgent:
 
         """Test the agent."""
         self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}, period: {self.period}")
-        self.env = Simulation(num_nodes=5, total_traffic=self.total_traffic, period=self.period, run_index=self.run_index)
+        #self.env = Simulation(num_nodes=5, total_traffic=self.total_traffic, period=self.period, run_index=self.run_index)
+        
+        # self.env = Simulation(num_nodes=5, 
+        #                     total_traffic=self.total_traffic, 
+        #                     period=self.period, 
+        #                     run_index=self.run_index, 
+        #                     failure_rate=self.failure_rate,
+        #                     recovery_rate=self.recovery_rate,
+        #                     test_failure_rate=self.test_failure_rate,
+        #                     test_recovery_rate=self.test_recovery_rate,
+        #                     max_broken_links=self.max_broken_links)
+        
         self.is_test = True
         self.total_step = 0
         
-
-        state = self.env.get_current_state()
+        # initialization
         scores = []
         rewards = []
         q_values = []
         
         with torch.no_grad():
-            # testing loop .........#
+         # the testing loop starts here...
             for self.total_step in tqdm(range(1, max_steps + 1)):
+                
+                # in the begging of each episode, reset the score
                 score = 0
-                for timestep in range(self.period):
-                    for ministep in range(3): # 3 mini steps in one episode
-                        self.logger.write("Current state: total_step, timestep, ministep: ", self.total_step,timestep, ministep)
-                        _ = self.update_links()
 
-                        if is_random:
-                            action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
-                        else:
-                            action = self.select_action(state.reshape(1,-1), 0)
-                        
-                        if ministep == 2:
-                            next_traffic = True
-                        else:
-                            next_traffic = False
+                # before the episode starts, we generate a new state using OSPF
+                state = None
+                next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_traffic=True, is_done=False, store_transition=False)
 
-                        next_state, reward, done, _ = self.step(action, require_uniform=False, next_traffic=next_traffic)
-                        rewards.append(reward)
-                        q_values.append(self.critic(torch.FloatTensor(state).to(self.device).reshape(1,-1), torch.FloatTensor(action).to(self.device).reshape(1,-1)).cpu().numpy().item())         
-                        state = next_state
-                        score  = reward + self.gamma * score
-                        
-                        self.logger.write('reward', reward)
-                        self.logger.write('score', score)
-                        self.logger.write('broken links', self.env.broken_links)
-                        self.logger.write('action', action.reshape(-1))
+                for timestep in range(1, self.period + 1):
+                    self.logger.write("==================== episode {} timestep {} ====================".format(self.total_step, timestep))
 
-                        if done:         
-                            scores.append(score)
+                    # check if it's the last step
+                    done = False if timestep < self.period else True
+
+                    # get (s, a)
+                    state = next_state
+                    if is_random:
+                        action = np.random.uniform(-1, 1, size=(1, self.a_dim))
+                    else:
+                        action = self.select_action(state, 0, store_transition=False)
+
+                    # Get (r, s'). Plus, update link conditions in the environment
+                    next_state, reward = self.step(action, next_traffic=True, is_done=done, store_transition=False)
+
+                    # record rewards and q values
+                    rewards.append(reward)
+
+                    # warning: if there's any shape error, check here first
+                    q_values.append(self.critic(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())         
+                    
+                    # update the score (G)
+                    score  = reward + self.gamma * score
+                    
+ 
+                    # logging (s, a, r, s')
+                    self.logger.write(f'current state {str(state.reshape(-1)):<20}') # (s, )
+                    self.logger.write(f'current action, {str(action.reshape(-1)):<20}') # (a, )
+                    self.logger.write(f'current reward, {str(reward):<20}') # (r, )
+                    self.logger.write(f'next state, {str(next_state.reshape(-1)):<20}') # (s', )
+
+                    # logging (other information)
+                    self.logger.write('score', score) # return (G)
+                    self.logger.write(f'broken links: {str(self.env.broken_links):<20}')
+
+                    # if the episode ends
+                    if done:
+                        scores.append(score)
                 
 
                 # plotting
-                if self.total_step % 10 ==1:
+                if self.total_step % 20 ==1:
                     self._plot(
                         frame_idx = self.total_step, 
                         scores = scores, 
                         rewards = rewards,
                         q_values = q_values,
                     )
-        # testing loop ends .........#
-
+        # the testing loop ends here
 
 
 
@@ -568,13 +595,13 @@ class DDPGAgent:
      
         """ Preprocess q values """
         if q_values and rewards:
-            q_values = (np.array(q_values) * 3).tolist()
-            ''' Group rewards every 15 items, 
+            q_values = (np.array(q_values)).tolist()
+            ''' Group rewards every 10 items, 
                 and change the ith value in the group into 
                 the sum over the ith to 15th value in the group.'''
             true_q_values = []
-            for i in range(0, len(rewards), 15):
-                true_q_values.extend([sum(rewards[i+j:i+15]) for j in range(15)])
+            for i in range(0, len(rewards), 10):
+                true_q_values.extend([sum(rewards[i+j:i+10]) for j in range(10)])
             """ check for validity """
             assert len(true_q_values) == len(q_values)
         else:
@@ -645,7 +672,7 @@ if __name__ == "__main__":
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
-                    "failure_rate":0.001, #0.01,
+                    "failure_rate":0.01, #0.01,
                     "recovery_rate":0.1, #0.1,
                     "test_failure_rate":0.001,
                     "test_recovery_rate":0.1,
@@ -653,27 +680,17 @@ if __name__ == "__main__":
                     "importance_sampling": False,
                     "record_uniform": False,
                     "max_broken_links": 4,
-                    "test_pretrained_model":f"experiments/{session_name}/actor_10000.ckpt",
-                    "run_index":0,
+                    "test_pretrained_model":f"experiments/0001_01_nois/actor_5000.ckpt",
+                    "run_index":2,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 print(config)
 
-                same_seed(2023)
-                agent = DDPGAgent(**config)
-                agent.train(max_steps=10000)
+                # same_seed(2023)
+                # agent = DDPGAgent(**config)
+                # agent.train(max_steps=5000)
                 same_seed(2024)
                 agent = DDPGAgent(**config)
                 agent.test(max_steps=1000)
                 exit(0)
-
-                # problems of generating same actions for all states
-                # 1-layer
-                # [1, 1, -1, 1, -1, -1, -1]
-                # [1, -1, 1, 1, -1, -1, -1]
-
-                # safe states best learned policy 1-layer
-                # [-1 -1  1 1 1 -1 1]
-
-                # safe states best learned policy 2-layer
 
