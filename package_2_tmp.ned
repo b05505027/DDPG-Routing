@@ -11,10 +11,12 @@ import inet.node.inet.StandardHost;
 import inet.visualizer.common.IntegratedVisualizer;
 
 
+
 @license(LGPL);
 //
 // TODO documentation
 //
+
 
 
 network Network
@@ -66,7 +68,7 @@ network Network
             @display("p=437,411");
             numEthInterfaces = 1;
         }
-        Visualizer: IntegratedVisualizer {
+        visualizer: IntegratedVisualizer {
             @display("p=550,111");
         }
     connections allowunconnected: // network level connections

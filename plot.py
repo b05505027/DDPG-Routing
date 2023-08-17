@@ -4,56 +4,49 @@ import json
 
 configs_train = [
     {
-        "score_path": "experiments/001_01_train_is_1_step/scores.json",
+        "score_path": "experiments/001_01_is/scores.json",
         "smoothing": 200,
         "color": '#2CBDFE', # blue
-        "legend": "001_01_train_is_1_step",
-        "scaling": 3,
+        "legend": "001_01_is",
+        "scaling": 1,
     },
     {
-        "score_path": "experiments/001_01_train_nois_1_step/scores.json",
+        "score_path": "experiments/001_01_nois/scores.json",
         "smoothing": 200,
         "color": '#47DBCD', # green
-        "legend": "001_01_train_nois_1_step",
-        "scaling": 3,
+        "legend": "001_01_nois",
+        "scaling": 1,
     },
     {
-        "score_path": "experiments/0001_01_train_nois_1_step/scores.json",
+        "score_path": "experiments/0001_01_nois/scores.json",
         "smoothing": 200,
         "color": '#F3A0F2', # pink
-        "legend": "0001_01_train_nois_1_step",
-        "scaling": 3,
-    },
-    {
-        "score_path": "experiments/001_01_train_nois_3_step/scores.json",
-        "smoothing": 200,
-        "color": '#9D2EC5', # purple
-        "legend": "001_01_train_nois_3_step",
+        "legend": "0001_01_nois",
         "scaling": 1,
     },
 ]
 
 
 configs_test = [
-    {
-        "score_path": "experiments/test_001_01_train_nois_3_step/scores_test.json",
+     {
+        "score_path": "experiments/test_001_01_is/scores_test.json",
         "smoothing": 100,
         "color": '#2CBDFE', # blue
-        "legend": "test_001_01_train_nois_3_step",
+        "legend": "001_01_is",
         "scaling": 1,
     },
     {
-        "score_path": "experiments/test_0001_01_train_nois_1_step/scores_test.json",
+        "score_path": "experiments/test_001_01_nois/scores_test.json",
         "smoothing": 100,
         "color": '#47DBCD', # green
-        "legend": "test_0001_01_train_nois_1_step",
+        "legend": "001_01_nois",
         "scaling": 1,
     },
     {
-        "score_path": "experiments/_____test_001_01_train_nois_1_step/scores_test.json",
+        "score_path": "experiments/test_0001_01_nois/scores_test.json",
         "smoothing": 100,
         "color": '#F3A0F2', # pink
-        "legend": "test_001_01_train_nois_1_step",
+        "legend": "0001_01_nois",
         "scaling": 1,
     },
     {
@@ -68,14 +61,69 @@ configs_test = [
 
 
 
+configs_q = [
+     {
+        "score_path": "experiments/test_001_01_is/q_values1_test.json",
+        "smoothing": 100,
+        "color": '#2CBDFE', # blue
+        "legend": "Q_values_from_001_01_is",
+        "scaling": 1,
+    },
+    {
+        "score_path": "experiments/test_001_01_is/q_values2_test.json",
+        "smoothing": 100,
+        "color": '#47DBCD', # green
+        "legend": "Q_values_from_001_01_nois",
+        "scaling": 1,
+    },
+    {
+        "score_path": "experiments/test_001_01_is/true_q_values_test.json",
+        "smoothing": 100,
+        "color": '#F3A0F2', # pink
+        "legend": "true_Q_values",
+        "scaling": 1,
+    },
+]
 
-for i in range(2):
+configs_q2 = [
+     {
+        "score_path": "experiments/test_0001_01_nois/q_values1_test.json",
+        "smoothing": 100,
+        "color": '#2CBDFE', # blue
+        "legend": "Q_values_from_0001_01_nois",
+        "scaling": 1,
+    },
+    # {
+    #     "score_path": "experiments/test_001_01_is/q_values2_test.json",
+    #     "smoothing": 100,
+    #     "color": '#47DBCD', # green
+    #     "legend": "Q_values_from_001_01_nois",
+    #     "scaling": 1,
+    # },
+    # {
+    #     "score_path": "experiments/test_random/scores_test.json",
+    #     "smoothing": 100,
+    #     "color": '#BDBDBD', # grey
+    #     "legend": "test_random",
+    #     "scaling": 1,
+    # },
+]
+
+
+
+for i in range(4):
     if i == 0:
         configs = configs_train
         title = "training_scores"
-    else:
+    elif i == 1:
         configs = configs_test
         title = "testing_scores"
+    elif i == 2:
+        configs = configs_q
+        title = "q_values_during_testing (actor:001_01_is)"
+    elif i == 3:
+        configs = configs_q2
+        title = "q_values_during_testing (actor:0001_01_nois)"
         
 
     plt.figure(figsize=(40, 20))

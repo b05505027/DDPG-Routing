@@ -11,6 +11,7 @@ configs = [
         "ini":'omnetpp_1_tmp.ini',
         "ned":'package_1_tmp.ned',
         'traffic':'traffic_1.xml',
+        'routing':'routing_1.xml',
     },
     {
         "project_path": "/Users/liangjialun/Desktop/routing",
@@ -18,6 +19,7 @@ configs = [
         "ini":'omnetpp_2_tmp.ini',
         "ned":'package_2_tmp.ned',
         'traffic':'traffic_2.xml',
+        'routing':'routing_2.xml',
 
     },
     {
@@ -26,8 +28,9 @@ configs = [
         "ini":'omnetpp_3_tmp.ini',
         "ned":'package_3_tmp.ned',
         'traffic':'traffic_3.xml',
-
-    }
+        'routing':'routing_3.xml',
+    },
+    
 ]
 
 
@@ -136,6 +139,60 @@ class Simulation:
         self.periodic_traffics = self.generate_periodic_traffics()
         self.current_traffic = self.get_periodic_traffic()
         self.new_traffic = self.get_periodic_traffic()
+
+
+        self.ethernet = {
+
+            (1,2): ("10.0.2.2", "eth1"),
+            (1,3): ("10.0.1.3", "eth0"),
+
+            (2,3):("10.0.7.3", "eth2"),
+            (2,4):("10.0.3.4", "eth1"),
+            (2,1):("10.0.2.1", "eth0"),
+
+            (3,2):("10.0.7.2", "eth3"),
+            (3,5):("10.0.5.5", "eth2"),
+            (3,4):("10.0.4.4", "eth1"),
+            (3,1):("10.0.1.1", "eth0"),
+
+
+            (4,5):("10.0.6.5", "eth2"),
+            (4,3):("10.0.4.3", "eth1"),
+            (4,2):("10.0.3.2", "eth0"),
+
+            (5,4):("10.0.6.4", "eth1"),
+            (5,3):("10.0.5.3", "eth0"),
+        }
+
+        self.edges = [
+                    (1, 3, {"weight": 0, "traffic": 0, "index": "1_1"}),
+                    (3, 1,  {"weight": 0, "traffic": 0, "index": "1_2"}),
+
+                    (1, 2, {"weight": 0, "traffic": 0, "index": "2_1"}),
+                    (2, 1, {"weight": 0, "traffic": 0, "index": "2_2"}),
+
+                    (2, 4, {"weight": 0, "traffic": 0, "index": "3_1"}),
+                    (4, 2, {"weight": 0, "traffic": 0, "index": "3_2"}),
+
+                    (3, 4, {"weight": 0, "traffic": 0, "index": "4_1"}),
+                    (4, 3, {"weight": 0, "traffic": 0, "index": "4_2"}),
+
+                    (3, 5, {"weight": 0, "traffic": 0, "index": "5_1"}),
+                    (5, 3, {"weight": 0, "traffic": 0, "index": "5_2"}),
+
+                    (4, 5, {"weight": 0, "traffic": 0, "index": "6_1"}),
+                    (5, 4, {"weight": 0, "traffic": 0, "index": "6_2"}),
+
+                    (2, 3, {"weight": 0, "traffic": 0, "index": "7_1"}),
+                    (3, 2, {"weight": 0, "traffic": 0, "index": "7_2"}),
+        ]
+
+        self.G = nx.DiGraph()
+        for i in range(1, self.num_nodes + 1):
+            self.G.add_node(i)
+        self.G.add_edges_from(self.edges)
+
+
     
         
 
@@ -147,7 +204,6 @@ class Simulation:
     def step(self, action, next_traffic = False):
 
         weights = self.action_transform(action)
-
         self.apply_weights(weights)
         self.apply_traffic(self.current_traffic)
         self.apply_broken_links()
@@ -155,6 +211,7 @@ class Simulation:
 
         delay, lossrate, link_traffiics = self.analyze_qos()
         link_traffiics = link_traffiics.reshape(1, -1)
+        
         reward = 1*self.delay_reward(delay) + 0.5*self.lossrate_reward(lossrate)
 
         # update the current traffic if next_traffic is True
@@ -284,6 +341,9 @@ class Simulation:
                 print(f'return code = {process.returncode}')
                 trial -= 1
             else:
+                # print(f'output: {process.stdout.decode("utf-8")}')
+                # print(f'output: {process.stderr}')
+                # print(f'return code = {process.returncode}')
                 break
         if trial == 0:
             print('Simulation failed')
@@ -305,7 +365,9 @@ class Simulation:
         # print(f'output: {process.stderr}')
         message = process.stdout.decode("utf-8")
         if "empty" in message:
-            input()
+            print('Simulation failed')
+            print(message)
+            exit(1)
 
 
         # create scalars.csv
@@ -327,12 +389,16 @@ class Simulation:
             source = module.split('.')[1][4:]
             destination = module.split('.')[2][-2:-1]
 
-            #print('source, destination', source, destination, 'mean', mean)
+            # print('length', length)
+            # print('source, destination', source, destination, 'mean', mean)
             if source == destination or mean == 0:
                 continue
             else:
                 app_delays.append(mean)
-        #print('app_delays', np.mean(app_delays))
+        # print('app_delays', app_delays)
+        # print('len(app_delays)', len(app_delays))
+        # print('app_delays', np.mean(app_delays))
+        # input()
         # input()
         if len(app_delays) != 0:
             avg_delay = np.mean(app_delays)
@@ -350,7 +416,7 @@ class Simulation:
         df_outgoing = df.query("name=='outgoingPackets:count' & value.notna()")
         data_outgoing = df_outgoing.to_dict('records')
 
-        link_traffics = [0] * len(self.ports)
+        link_traffics = [0] * len(self.ports) * 2
         for data in data_outgoing:
             outgoing_packets = int(data['value'])
             module = data['module']
@@ -365,12 +431,15 @@ class Simulation:
                 # print('self.ports[i]', self.ports[i])
                 # print('(socure, port)', (source, port))
                 if (source, port) in self.ports[i]:
-                    #print('contribution to link', i, outgoing_packets)
-                    link_traffics[i] += outgoing_packets
+                    index = self.ports[i].index((source, port))
+                    #print('contribution to link', 2*i+1, outgoing_packets)
+                    link_traffics[2*i + index] += outgoing_packets
         link_traffics = np.array(link_traffics)
+        #print('link_traffics', link_traffics)
         # normalize the link traffics
         link_traffics = link_traffics / np.sum(link_traffics)
         #print('link_traffics', link_traffics)
+        #input()
 
         # analyze packet-drop rate
         #df_total = df.query("name=='incomingPackets:count' & value.notna()")
@@ -386,8 +455,6 @@ class Simulation:
         loss_rates = []
         for scalar in data:
             total_packets = int(scalar[0]['value'])
-
-
             lost_packets = int(scalar[1]['value']) + int(scalar[2]['value'])
             # print('name', scalar[0]['module'])
             # print('total_packets', total_packets)
@@ -406,22 +473,43 @@ class Simulation:
 
 
         os.chdir(configs[self.run_index]['project_path'])
+        #input()
         return avg_delay, avg_lossrate, link_traffics
 
 
     # applying link weights
     def apply_weights(self, link_weights):
-        # link wieghts is an array of link weights
-        weight_path = configs[self.run_index]["simulation_path"] + "/weights.xml"
-        tree = ET.parse(weight_path)
-        root = tree.getroot()
+        # set weights
+        for edge in self.G.edges.data():
+            index = int(edge[2]['index'][:edge[2]['index'].find("_")]) - 1
+            edge[2]['weight'] = link_weights[index]
 
-        #print('link_weights', link_weights)
+        #print('now the edge data is', [x[2]['weight'] for x in self.G.edges.data()])
+        #input()
 
-        for i in range(len(link_weights)):
-            link_node = root.findall(f"./autoroute/link[@name='link{i+1}']")[0]
-            link_node.set("cost", str(link_weights[i]))
-        tree.write(weight_path)
+        # calculate the shortest paths
+        shortest_paths = nx.shortest_path(self.G,  weight="weight")
+
+
+        routing_string = ""
+
+        for source in range(self.num_nodes):
+            source = source + 1
+            paths = shortest_paths[source] # the shortest paths from source to all other reachable nodes
+            for destination in paths.keys():
+                if source != destination:
+                    next_hop = paths[destination][1]
+                    gateway, interface = self.ethernet[(source, next_hop)]
+                    routing_string += f'	<route hosts="node{source}" destination="192.168.{destination}.0" netmask="255.255.255.0" gateway="{gateway}" interface="{interface}"/>\n'
+
+
+
+        routing_path = configs[self.run_index]["simulation_path"] + "/routing.xml"
+        routing_template = open(configs[self.run_index]['routing'], 'r').read()
+        routing_template = routing_template.replace("<SHORTEST_PATH_ROUTING_CONFIG>", routing_string)
+        with open(routing_path, 'w') as f:
+            f.write(routing_template)
+
     
     def apply_broken_links(self):
         ned_path = configs[self.run_index]["simulation_path"] + "/package.ned"

@@ -121,10 +121,9 @@ class Critic(nn.Module):
         """Initialize."""
         super(Critic, self).__init__()
         
-        self.hidden1 = nn.Linear(input_dim, 128)
-        self.hidden2 = nn.Linear(128, 128)
-        self.hidden3 = nn.Linear(128, 64)
-        self.out = nn.Linear(64, 1)
+        self.hidden1 = nn.Linear(input_dim, 300)
+        self.hidden2 = nn.Linear(300, 200)
+        self.out = nn.Linear(200, 1)
         
         self.out.weight.data.uniform_(-init_w, init_w)
         self.out.bias.data.uniform_(-init_w, init_w)
@@ -136,7 +135,7 @@ class Critic(nn.Module):
         x = torch.cat((state, action), dim=-1)
         x = F.relu(self.hidden1(x))
         x = F.relu(self.hidden2(x))
-        x = F.relu(self.hidden3(x))
+        #x = F.relu(self.hidden3(x))
         value = self.out(x)
         
         return value
@@ -171,7 +170,9 @@ class DDPGAgent:
         importance_sampling: bool = True,
         record_uniform: bool = False,
         max_broken_links: int = 0,
-        test_pretrained_model: str = "",
+        test_pretrained_actor: str = "",
+        test_pretrained_critic1: str = "",
+        test_pretrained_critic2: str = "",
         run_index: int = 0,
         
     ):
@@ -211,7 +212,10 @@ class DDPGAgent:
         self.ministeps = ministeps
         self.importance_sampling = importance_sampling
         self.record_uniform = record_uniform
-        self.test_pretrained_model = test_pretrained_model
+        self.test_pretrained_actor = test_pretrained_actor
+        self.test_pretrained_critic1 = test_pretrained_critic1
+        self.test_pretrained_critic2 = test_pretrained_critic2
+
         
         self.run_index = run_index
         
@@ -231,6 +235,8 @@ class DDPGAgent:
         self.critic = Critic(s_dim + a_dim).to(self.device)
         self.critic_target = Critic(s_dim + a_dim).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
+
+        
 
         # optimizer
         self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=self.actor_lr)
@@ -271,7 +277,7 @@ class DDPGAgent:
         # during the timeslot, get the current reward and traffic load for each link,
         # which is used to calculate the next state
         link_traffics, reward  = self.env.step(action, next_traffic=next_traffic)
-
+        
         # update and observe link conditions, get the ratio for importance sampling
         prob, prob_test = self.env.update_links(self.is_test)
         if self.importance_sampling:
@@ -369,7 +375,18 @@ class DDPGAgent:
         """Train the agent."""
         self.is_test = False
         self.logger = Logger("experiments/" + session_name + "/log.txt")
-
+        
+        if self.test_pretrained_actor:
+            self.actor.load_state_dict(torch.load(self.test_pretrained_actor))
+            self.actor_target.load_state_dict(self.actor.state_dict())
+            self.actor = self.actor.to(self.device)
+            self.actor_target = self.actor_target.to(self.device)
+            self.critic.load_state_dict(torch.load(self.test_pretrained_actor.replace("actor", "critic")))
+            self.critic_target.load_state_dict(self.critic.state_dict())
+            self.critic = self.critic.to(self.device)
+            self.critic_target = self.critic_target.to(self.device)
+        else:
+            print("No pretrained model is loaded!!!")
         # initialization
         actor_losses = []
         critic_losses = []
@@ -467,27 +484,38 @@ class DDPGAgent:
         """ load the pretrained model """
         self.logger = Logger("experiments/" + session_name + "/log_test.txt")
         is_random = False
-        if self.test_pretrained_model == "random":
+        if self.test_pretrained_actor == "random":
             is_random = True
         else:
-            self.actor.load_state_dict(torch.load(self.test_pretrained_model))
+            self.actor.load_state_dict(torch.load(self.test_pretrained_actor))
             self.actor = self.actor.to(self.device)
-            self.critic.load_state_dict(torch.load(self.test_pretrained_model.replace("actor", "critic")))
+
+        if self.test_pretrained_critic1:
+            self.critic.load_state_dict(torch.load(self.test_pretrained_critic1))
             self.critic = self.critic.to(self.device)
+            print('critic1 loaded')
+            print(self.test_pretrained_critic1)
+            for name, param in self.critic.named_parameters():
+                if name == 'out.weight':
+                   print(name, param)
+        
+
+        if self.test_pretrained_critic2:
+            self.critic2 = Critic(self.s_dim + self.a_dim).to(self.device)
+            self.critic2.load_state_dict(torch.load(self.test_pretrained_critic2))
+            self.critic2 = self.critic2.to(self.device)
+            print('critic2 loaded')
+            print(self.test_pretrained_critic2)
+            for name, param in self.critic2.named_parameters():
+                if name == 'out.weight':
+                   print(name, param)
+        else:
+            self.critic2 = None
+
 
         """Test the agent."""
         self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}, period: {self.period}")
-        #self.env = Simulation(num_nodes=5, total_traffic=self.total_traffic, period=self.period, run_index=self.run_index)
-        
-        # self.env = Simulation(num_nodes=5, 
-        #                     total_traffic=self.total_traffic, 
-        #                     period=self.period, 
-        #                     run_index=self.run_index, 
-        #                     failure_rate=self.failure_rate,
-        #                     recovery_rate=self.recovery_rate,
-        #                     test_failure_rate=self.test_failure_rate,
-        #                     test_recovery_rate=self.test_recovery_rate,
-        #                     max_broken_links=self.max_broken_links)
+     
         
         self.is_test = True
         self.total_step = 0
@@ -495,7 +523,8 @@ class DDPGAgent:
         # initialization
         scores = []
         rewards = []
-        q_values = []
+        q_values1 = []
+        q_values2 = []
         
         with torch.no_grad():
          # the testing loop starts here...
@@ -528,7 +557,10 @@ class DDPGAgent:
                     rewards.append(reward)
 
                     # warning: if there's any shape error, check here first
-                    q_values.append(self.critic(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())         
+                    if self.critic:
+                        q_values1.append(self.critic(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())   
+                    if self.critic2:
+                        q_values2.append(self.critic2(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())         
                     
                     # update the score (G)
                     score  = reward + self.gamma * score
@@ -555,7 +587,8 @@ class DDPGAgent:
                         frame_idx = self.total_step, 
                         scores = scores, 
                         rewards = rewards,
-                        q_values = q_values,
+                        q_values1 = q_values1,
+                        q_values2 = q_values2,
                     )
         # the testing loop ends here
 
@@ -571,7 +604,8 @@ class DDPGAgent:
         critic_losses: List[float] = [], 
         exploration_rates: List[float] = [],
         rewards: List[float]= [],
-        q_values: List[float]= [],
+        q_values1: List[float]= [],
+        q_values2: List[float]= [],
     ):
         """ Colors for plotting """
         CB91_Blue = '#2CBDFE'
@@ -581,6 +615,7 @@ class DDPGAgent:
         CB91_Violet = '#661D98'
         CB91_Amber = '#F5B14C'
         CB91_Grey = '#BDBDBD'
+        
 
         """Plot the training progresses."""
         def subplot(loc: int, title: str, values: List[float], color: str, legend: str, smoothing: int):
@@ -594,33 +629,41 @@ class DDPGAgent:
                 plt.legend()
      
         """ Preprocess q values """
-        if q_values and rewards:
-            q_values = (np.array(q_values)).tolist()
+        if rewards:
             ''' Group rewards every 10 items, 
                 and change the ith value in the group into 
                 the sum over the ith to 15th value in the group.'''
             true_q_values = []
             for i in range(0, len(rewards), 10):
                 true_q_values.extend([sum(rewards[i+j:i+10]) for j in range(10)])
-            """ check for validity """
-            assert len(true_q_values) == len(q_values)
         else:
             true_q_values = []
-            q_values = []
+
+        if q_values1:
+            q_values1 = (np.array(q_values1)).tolist()
+        if q_values2:
+            q_values2 = (np.array(q_values2)).tolist()
+        
+        """ check for validity """
+        if len(q_values1) > 0 and len(true_q_values) > 0:
+            assert len(true_q_values) == len(q_values1)
+        if len(q_values2) > 0 and len(true_q_values) > 0:
+            assert len(true_q_values) == len(q_values2)
 
 
         """ dump raw values"""
         if self.is_test:
             json.dump(scores, open(f"./experiments/{self.session_name}/scores_test.json", "w"))
             json.dump(true_q_values, open(f"./experiments/{self.session_name}/true_q_values_test.json", "w"))
-            json.dump(q_values, open(f"./experiments/{self.session_name}/q_values_test.json", "w"))
+            json.dump(q_values1, open(f"./experiments/{self.session_name}/q_values1_test.json", "w"))
+            json.dump(q_values2, open(f"./experiments/{self.session_name}/q_values2_test.json", "w"))
             json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform_test.json", "w"))
         else:
             json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
             json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
 
         if self.is_test:
-            first_title = self.test_pretrained_model
+            first_title = self.test_pretrained_actor
         else:
             first_title = "DDPG"
         subplot_params = [
@@ -629,7 +672,8 @@ class DDPGAgent:
             [142, "actor_loss", actor_losses, CB91_Pink, None, 20],
             [143, "critic_loss", critic_losses, CB91_Purple,None, 20],
             [144, f"predicted and true Q values", true_q_values, CB91_Violet, "true_q_value", 20],
-            [144, f"predicted and true Q values", q_values, CB91_Amber, "predicted_q_values", 20],
+            [144, f"predicted and true Q values", q_values1, CB91_Amber, "predicted_q_values_1", 20],
+            [144, f"predicted and true Q values", q_values2, "yellowgreen", "predicted_q_values_2", 20],
         ]
         plt.close('all')
         plt.figure(figsize=(30, 5))
@@ -659,38 +703,41 @@ if __name__ == "__main__":
                 session_name = checkpoint + "_newis_" + name
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
-                    "s_dim": 14,
-                    "a_dim": 7,
+                    "s_dim": 21,
+                    "a_dim": 14,
                     "buffers_size": 4096,
                     "sample_size": 64,
                     "gamma": 0.9999,
                     "eps": 0.9992, #0.995 -> 0.9992 six times longer
-                    "initial_random_steps": 64 ,#64 -> 1000
-                    "total_traffic": 300,
+                    "initial_random_steps":64 ,#64 -> 1000
+                    "total_traffic": 500,
                     "period": period,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
-                    "failure_rate":0.01, #0.01,
-                    "recovery_rate":0.1, #0.1,
+                    "failure_rate":0.001, #0.01, 0.038 0.076 0.088
+                    "recovery_rate":0.1, #0.1, 0.068 0.192 0.322
                     "test_failure_rate":0.001,
                     "test_recovery_rate":0.1,
                     "ministeps": 1, #3,
                     "importance_sampling": False,
                     "record_uniform": False,
                     "max_broken_links": 4,
-                    "test_pretrained_model":f"experiments/0001_01_nois/actor_5000.ckpt",
-                    "run_index":2,
+                    "test_pretrained_actor": "",
+                    "test_pretrained_critic1": "",#"experiments/0001_01_nois/critic_5000.ckpt",
+                    "test_pretrained_critic2": "",#"experiments/001_01_nois/critic_5000.ckpt",
+                    "run_index":1,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
-                print(config)
+                for e in config.items():
+                    print(e)
 
-                # same_seed(2023)
-                # agent = DDPGAgent(**config)
-                # agent.train(max_steps=5000)
-                same_seed(2024)
+                same_seed(2023)
                 agent = DDPGAgent(**config)
-                agent.test(max_steps=1000)
+                agent.train(max_steps=20000)
+                # same_seed(2024)
+                # agent = DDPGAgent(**config)
+                # agent.test(max_steps=1000)
                 exit(0)
 
