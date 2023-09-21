@@ -156,16 +156,16 @@ class DDPGAgent:
         tau: float = 0.005,
         initial_random_steps: int = 1e4,
         total_traffic: int = 1000,
-        period: int = 1,
+        time_limit: int = 100,
+        horizon: int = 10,
         num_nodes: int = 5,
         actor_lr: float = 3e-4,
         critic_lr: float = 1e-3,
         l2_reg: float = 1e-6,
         session_name: str = "example",
-        failure_rate: float = 0.0,
-        recovery_rate: float = 0.0,
-        test_failure_rate: float = 0.01,
-        test_recovery_rate: float = 0.1,
+        lam_f: float = 200,
+        lam_r: float = 20,
+        lam_f_test: float = 1000,
         ministeps: int = 3,
         importance_sampling: bool = True,
         record_uniform: bool = False,
@@ -181,12 +181,11 @@ class DDPGAgent:
         """Initialize."""
         self.env = Simulation(num_nodes=5, 
                             total_traffic=total_traffic, 
-                            period=period, 
+                            time_limit=time_limit, 
                             run_index=run_index, 
-                            failure_rate=failure_rate,
-                            recovery_rate=recovery_rate,
-                            test_failure_rate=test_failure_rate,
-                            test_recovery_rate=test_recovery_rate,
+                            lam_f = lam_f, 
+                            lam_r = lam_r,
+                            lam_f_test = lam_f_test,
                             max_broken_links=max_broken_links,)
 
         self.a_dim = a_dim
@@ -201,7 +200,7 @@ class DDPGAgent:
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
         self.session_name = session_name
-        self.period = period
+        self.horizon = horizon
 
 
 
@@ -272,18 +271,20 @@ class DDPGAgent:
         return selected_action
     
     #@profile(stream=sys.stdout)
-    def step(self, action: np.ndarray, next_traffic: np.ndarray, is_done: bool = False, store_transition: bool=True) -> Tuple[np.ndarray, float]:
+    def step(self, action: np.ndarray, next_event: bool, is_done: bool = False, store_transition: bool=True) -> Tuple[np.ndarray, float]:
         
         # during the timeslot, get the current reward and traffic load for each link,
         # which is used to calculate the next state
-        link_traffics, reward  = self.env.step(action, next_traffic=next_traffic)
+        qos  = self.env.step(action, next_event=next_event)
+        if qos==None:
+            return None
+        link_traffics, reward = qos
         
-        # update and observe link conditions, get the ratio for importance sampling
-        prob, prob_test = self.env.update_links(self.is_test)
         if self.importance_sampling:
-            is_ratio = prob_test / prob
+            is_ratio = self.env.is_ratio
         else:
             is_ratio = 1.0
+        print('is_ratio', is_ratio)
 
         # synthesize the new state
         failure_state = np.zeros(7, dtype=float).reshape(1,-1)
@@ -329,10 +330,10 @@ class DDPGAgent:
         next_value = self.critic_target(next_state, next_action)
 
         # old implementation
-        # curr_return = reward + self.gamma * is_ratio * next_value * masks
+        curr_return = reward + self.gamma * is_ratio * next_value * masks
         # new implementation
 
-        curr_return = is_ratio * (reward + self.gamma * next_value * masks)
+        #curr_return = is_ratio * (reward + self.gamma * next_value * masks)
         
 
         
@@ -394,9 +395,18 @@ class DDPGAgent:
         scores_uniform = []
         exploration_rates = []
         link_failure_times = []
+        traffics  = []
+
+        # get the event size
+        events_size = self.env.get_event_size()
+        print('event_size', events_size)
+
+        # initialize the state
+        state = None
+        next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_event=True, is_done=False, store_transition=False)
         
         # start interacting with the environment
-        for self.total_step in tqdm(range(1, max_steps + 1)):
+        for self.total_step in tqdm(range(1, events_size//self.horizon + 2)):
             
             # calculate current exploration rate
             exploration_rate = np.power(self.eps, self.total_step)
@@ -405,38 +415,38 @@ class DDPGAgent:
             # in the beginning of each episode, reset the score
             score = 0
             score_uniform = 0
+            
+            for timestep in range(1, self.horizon + 1):
+                self.logger.write("==================== episode {} timestep {}/{} ====================".format(self.total_step, timestep,events_size))
+                # check if it's the last step
+                done = False if timestep <  self.horizon else True
                 
-            # before the episode starts, we generate a new state using OSPF
-            state = None
-            next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_traffic=True, is_done=False, store_transition=False)
+                # get and store the new action (s, a)
+                state = next_state
+                action = self.select_action(state, exploration_rate, store_transition=True)
 
-            for timestep in range(1, self.period + 1):
-                    self.logger.write("==================== episode {} timestep {} ====================".format(self.total_step, timestep))
-                    # check if it's the last step
-                    done = False if timestep < self.period else True
-                    
-                    # get and store the new action (s, a)
-                    state = next_state
-                    action = self.select_action(state, exploration_rate, store_transition=True)
-                    # get and store the new state(r, s'), plus, update link conditions in the environment
-                    next_state, reward = self.step(action,next_traffic=True, is_done=done, store_transition=True)
+                # get and store the new state(r, s'), plus, update link conditions in the environment
+                next_state, reward = self.step(action,next_event=True, is_done=done, store_transition=True)
 
-                    # update the score (G)
-                    score  = reward + self.gamma * score
-                
-                    # logging (s, a, r, s')
-                    self.logger.write(f'current state {str(state.reshape(-1)):<20}') # (s, )
-                    self.logger.write(f'current action, {str(action.reshape(-1)):<20}') # (a, )
-                    self.logger.write(f'current reward, {str(reward):<20}') # (r, )
-                    self.logger.write(f'next state, {str(next_state.reshape(-1)):<20}') # (s', )
+                # update the score (G)
+                score  = reward + score
+            
+                # logging (s, a, r, s')
+                self.logger.write(f'current state {str(state.reshape(-1)):<20}') # (s, )
+                self.logger.write(f'current action, {str(action.reshape(-1)):<20}') # (a, )
+                self.logger.write(f'current reward, {str(reward):<20}') # (r, )
+                self.logger.write(f'next state, {str(next_state.reshape(-1)):<20}') # (s', )
 
-                    # logging (other information)
-                    self.logger.write('score', score) # return (G)
-                    self.logger.write(f'broken links: {str(self.env.broken_links):<20}')
+                # logging (other information)
+                self.logger.write('score', score) # return (G)
+                self.logger.write(f'broken links: {str(self.env.broken_links):<20}')
+                self.logger.write(f'current traffic:', self.env.current_traffic)
 
-                    # if the episode ends
-                    if done:
-                        scores.append(score)
+                # if the episode ends
+                if done:
+                    scores.append(score)
+
+                traffics.append(self.env.current_traffic.sum())
 
             # if training is ready
             if (
@@ -446,6 +456,7 @@ class DDPGAgent:
                 actor_loss, critic_loss = self.update_model()
                 actor_losses.append(actor_loss)
                 critic_losses.append(critic_loss)
+                
             
             # plotting
             if self.total_step % plotting_interval == 0:
@@ -456,6 +467,7 @@ class DDPGAgent:
                     actor_losses = actor_losses, 
                     critic_losses = critic_losses,
                     exploration_rates = exploration_rates,
+                    traffics = traffics,
                 )
 
             if self.total_step % 100 == 0:
@@ -481,9 +493,13 @@ class DDPGAgent:
     
 
     def test(self, max_steps: int):
+
+        
         """ load the pretrained model """
         self.logger = Logger("experiments/" + session_name + "/log_test.txt")
         is_random = False
+
+
         if self.test_pretrained_actor == "random":
             is_random = True
         else:
@@ -514,7 +530,7 @@ class DDPGAgent:
 
 
         """Test the agent."""
-        self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}, period: {self.period}")
+        self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}")
      
         
         self.is_test = True
@@ -525,33 +541,41 @@ class DDPGAgent:
         rewards = []
         q_values1 = []
         q_values2 = []
+        traffics  = []
+
+        # get the event size
+        events_size = self.env.get_event_size()
+        events_size = events_size // 20
+        print('event_size', events_size)
+
+        # initialize the state
+        state = None
+        next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_event=True, is_done=False, store_transition=False)
+        
         
         with torch.no_grad():
          # the testing loop starts here...
-            for self.total_step in tqdm(range(1, max_steps + 1)):
+             for self.total_step in tqdm(range(1, events_size//self.horizon + 2)):
                 
                 # in the begging of each episode, reset the score
                 score = 0
 
-                # before the episode starts, we generate a new state using OSPF
-                state = None
-                next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_traffic=True, is_done=False, store_transition=False)
-
-                for timestep in range(1, self.period + 1):
-                    self.logger.write("==================== episode {} timestep {} ====================".format(self.total_step, timestep))
-
+                for timestep in range(1, self.horizon + 1):
+                    self.logger.write("==================== episode {} timestep {}/{} ====================".format(self.total_step, timestep,events_size))
+                    
                     # check if it's the last step
-                    done = False if timestep < self.period else True
+                    done = False if timestep <  self.horizon else True
 
-                    # get (s, a)
+                    # get and store the new action (s, a)
                     state = next_state
-                    if is_random:
-                        action = np.random.uniform(-1, 1, size=(1, self.a_dim))
-                    else:
-                        action = self.select_action(state, 0, store_transition=False)
+                    action = self.select_action(state, 0, store_transition=False)
 
-                    # Get (r, s'). Plus, update link conditions in the environment
-                    next_state, reward = self.step(action, next_traffic=True, is_done=done, store_transition=False)
+                    # get and store the new state(r, s'), plus, update link conditions in the environment
+                    next_state, reward = self.step(action,next_event=True, is_done=done, store_transition=False)
+
+                    # update the score (G)
+                    score  = reward + score
+                    print('score', score)
 
                     # record rewards and q values
                     rewards.append(reward)
@@ -563,7 +587,7 @@ class DDPGAgent:
                         q_values2.append(self.critic2(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())         
                     
                     # update the score (G)
-                    score  = reward + self.gamma * score
+                    # score  = reward + self.gamma * score
                     
  
                     # logging (s, a, r, s')
@@ -575,10 +599,13 @@ class DDPGAgent:
                     # logging (other information)
                     self.logger.write('score', score) # return (G)
                     self.logger.write(f'broken links: {str(self.env.broken_links):<20}')
+                    self.logger.write(f'current traffic:', self.env.current_traffic)
 
                     # if the episode ends
                     if done:
                         scores.append(score)
+
+                    traffics.append(self.env.current_traffic.sum())
                 
 
                 # plotting
@@ -589,7 +616,8 @@ class DDPGAgent:
                         rewards = rewards,
                         q_values1 = q_values1,
                         q_values2 = q_values2,
-                    )
+                        traffics = traffics,
+                )
         # the testing loop ends here
 
 
@@ -606,6 +634,7 @@ class DDPGAgent:
         rewards: List[float]= [],
         q_values1: List[float]= [],
         q_values2: List[float]= [],
+        traffics: List[float]= [],
     ):
         """ Colors for plotting """
         CB91_Blue = '#2CBDFE'
@@ -667,22 +696,23 @@ class DDPGAgent:
         else:
             first_title = "DDPG"
         subplot_params = [
-            [141, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, first_title, 20],
-            [141, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform", 20],
-            [142, "actor_loss", actor_losses, CB91_Pink, None, 20],
-            [143, "critic_loss", critic_losses, CB91_Purple,None, 20],
-            [144, f"predicted and true Q values", true_q_values, CB91_Violet, "true_q_value", 20],
-            [144, f"predicted and true Q values", q_values1, CB91_Amber, "predicted_q_values_1", 20],
-            [144, f"predicted and true Q values", q_values2, "yellowgreen", "predicted_q_values_2", 20],
+            [511, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, first_title, 50],
+            [511, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform", 50],
+            [512, "actor_loss", actor_losses, CB91_Pink, None, 20],
+            [513, "critic_loss", critic_losses, CB91_Purple,None, 20],
+            [514, f"predicted and true Q values", true_q_values, CB91_Violet, "true_q_value", 50],
+            [514, f"predicted and true Q values", q_values1, CB91_Amber, "predicted_q_values_1", 50],
+            [514, f"predicted and true Q values", q_values2, "yellowgreen", "predicted_q_values_2", 50],
+            [515, f"traffic pattern", traffics, CB91_Grey, "traffic", 50],
         ]
         plt.close('all')
-        plt.figure(figsize=(30, 5))
+        plt.figure(figsize=(30, 40))
         for parameters in subplot_params:
             subplot(*parameters)
 
         # additional plot for exploration rate
         if not self.is_test:
-            plt.subplot(141)
+            plt.subplot(511)
             plt.twinx().plot(exploration_rates, "--", color='#F2BFC8')
 
         if self.is_test:
@@ -701,43 +731,43 @@ if __name__ == "__main__":
                 for x in time.localtime()[:6]:
                     checkpoint += str(x) + "_"
                 session_name = checkpoint + "_newis_" + name
+                session_name = "[4300]test_f=500"
                 os.mkdir(f"./experiments/{session_name}")
                 config = {
                     "s_dim": 21,
                     "a_dim": 14,
-                    "buffers_size": 4096,
+                    "buffers_size": 8192,
                     "sample_size": 64,
-                    "gamma": 0.9999,
-                    "eps": 0.9992, #0.995 -> 0.9992 six times longer
-                    "initial_random_steps":64 ,#64 -> 1000
-                    "total_traffic": 500,
-                    "period": period,
+                    "gamma": 1.0,
+                    "eps": 0.995, #0.995 -> 0.9992 six times longer
+                    "initial_random_steps":128 ,#64 -> 1000
+                    "total_traffic": 1000,
+                    "time_limit": 100000,
+                    "horizon": 20,
                     "num_nodes": 5,
                     "actor_lr": actor_lr,
                     "critic_lr": critic_lr,
                     "session_name": session_name,
-                    "failure_rate":0.001, #0.01, 0.038 0.076 0.088
-                    "recovery_rate":0.1, #0.1, 0.068 0.192 0.322
-                    "test_failure_rate":0.001,
-                    "test_recovery_rate":0.1,
-                    "ministeps": 1, #3,
+                    "lam_f": 1000,
+                    "lam_r": 20,
+                    "lam_f_test": 1000,
                     "importance_sampling": False,
                     "record_uniform": False,
-                    "max_broken_links": 4,
-                    "test_pretrained_actor": "",
-                    "test_pretrained_critic1": "",#"experiments/0001_01_nois/critic_5000.ckpt",
+                    "max_broken_links": 7,
+                    "test_pretrained_actor": "experiments/train_f=500/actor_4800.ckpt",
+                    "test_pretrained_critic1": "experiments/train_f=500/critic_4800.ckpt",
                     "test_pretrained_critic2": "",#"experiments/001_01_nois/critic_5000.ckpt",
-                    "run_index":1,
+                    "run_index":3,
                 }
                 s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
                 for e in config.items():
                     print(e)
 
-                same_seed(2023)
-                agent = DDPGAgent(**config)
-                agent.train(max_steps=20000)
-                # same_seed(2024)
+                # same_seed(2023)
                 # agent = DDPGAgent(**config)
-                # agent.test(max_steps=1000)
+                # agent.train(max_steps=20000)
+                same_seed(2024)
+                agent = DDPGAgent(**config)
+                agent.test(max_steps=1000)
                 exit(0)
 

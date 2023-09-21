@@ -3,6 +3,7 @@ import os, subprocess
 import pandas as pd
 import numpy as np
 import networkx as nx 
+from events import generate_traffic_events, generate_rf_events
 
 configs = [
     {
@@ -29,6 +30,30 @@ configs = [
         "ned":'package_3_tmp.ned',
         'traffic':'traffic_3.xml',
         'routing':'routing_3.xml',
+    },
+        {
+        "project_path": "/Users/liangjialun/Desktop/routing",
+        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations4",
+        "ini":'omnetpp_4_tmp.ini',
+        "ned":'package_4_tmp.ned',
+        'traffic':'traffic_4.xml',
+        'routing':'routing_4.xml',
+    },
+        {
+        "project_path": "/Users/liangjialun/Desktop/routing",
+        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations5",
+        "ini":'omnetpp_5_tmp.ini',
+        "ned":'package_5_tmp.ned',
+        'traffic':'traffic_5.xml',
+        'routing':'routing_5.xml',
+    },
+        {
+        "project_path": "/Users/liangjialun/Desktop/routing",
+        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations6",
+        "ini":'omnetpp_6_tmp.ini',
+        "ned":'package_6_tmp.ned',
+        'traffic':'traffic_6.xml',
+        'routing':'routing_6.xml',
     },
     
 ]
@@ -99,32 +124,21 @@ class Logger:
             f.write(message + '\n')
 
 class Simulation:
-    def __init__(self, num_nodes, total_traffic, period, run_index, failure_rate=0.1, recovery_rate=0.1, test_failure_rate=0.1, test_recovery_rate=0.1, max_broken_links=7):
+    def __init__(self, num_nodes, total_traffic, time_limit, run_index, lam_f, lam_r, lam_f_test, max_broken_links=7):
         self.omnet_init()
         self.num_nodes = num_nodes
         self.total_traffic = total_traffic
-        self.period = period
-        self.periodic_index = 0
+        self.time_limit = time_limit
         self.broken_links = []
         self.run_index = run_index
-        self.failure_rate=failure_rate
-        self.recovery_rate=recovery_rate
-        self.test_failure_rate=test_failure_rate
-        self.test_recovery_rate=test_recovery_rate
         self.max_broken_links=max_broken_links
+        self.is_radio = 0
 
+        self.lam_t = 1
+        self.lam_f = lam_f
+        self.lam_f_test = lam_f_test
+        self.lam_r = lam_r
 
-
-        # create ports
-        # self.ports = [
-        #     ("node1.ethg[0]", "node3.ethg[0]"),
-        #     ("node1.ethg[1]", "node2.ethg[0]"),
-        #     ("node2.ethg[1]", "node4.ethg[0]"),
-        #     ("node3.ethg[1]", "node4.ethg[1]"),
-        #     ("node3.ethg[2]", "node5.ethg[0]"),
-        #     ("node4.ethg[2]", "node5.ethg[1]"),
-        #     ("node2.ethg[2]", "node3.ethg[3]"),
-        # ]
         self.ports = [
             ((1,0), (3,0)), 
             ((1,1), (2,0)),
@@ -135,10 +149,36 @@ class Simulation:
             ((2,2), (3,3)),
         ]
         
+
+        # generate traffic events
+        self.traffic_events = generate_traffic_events(lam_t=self.lam_t, time_limit=self.time_limit)
+        self.traffic_number = len(self.traffic_events)
+        # generate rf events
+        self.events = self.traffic_events
+        for i in range(self.max_broken_links):
+            self.events.extend(generate_rf_events(link_id=i, lam_f=self.lam_f, lam_r=self.lam_r, time_limit=self.time_limit))
+        # sort the events based on the occurrence time
+        self.events.sort(key=lambda x: x[0])
+        # for e in self.events:
+        #     print(e)
+        # input()
+
+
+
+
+        self.event_index = 0
+        self.current_event = None
+        self.next_event = self.get_event()
+
+
+       
+        
+
         # generate traffics
-        self.periodic_traffics = self.generate_periodic_traffics()
-        self.current_traffic = self.get_periodic_traffic()
-        self.new_traffic = self.get_periodic_traffic()
+        self.traffics = self.generate_traffics(traffic_number=self.traffic_number)
+        self.traffic_index = 0
+        self.current_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
+        
 
 
         self.ethernet = {
@@ -191,21 +231,71 @@ class Simulation:
         for i in range(1, self.num_nodes + 1):
             self.G.add_node(i)
         self.G.add_edges_from(self.edges)
-
-
     
+    def resume_simulation(self):
+        self.event_index = 0
+        self.current_event = None
+        self.next_event = self.get_event()
+        self.traffic_index = 0
+        self.current_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
+        self.broken_links = []
+        return
+
+
+    def get_event_size(self):
+        return len(self.events)
+    def step(self, action, next_event = False):
+        if next_event:
+            print("next event")
+            self.current_event = self.next_event
+            self.next_event = self.get_event()
+            if self.current_event == None: # terminate
+                return None
+            
+            bn = len(self.broken_links)
+            rate_t = 1/self.lam_t
+            rate_r = 1/self.lam_r
+            rate_f = 1/self.lam_f
+            rate_f_test = 1/self.lam_f_test
+            
+            if self.current_event[1].startswith("traffic"):
+                self.current_traffic += self.get_traffic()
+                self.current_traffic = np.floor(self.current_traffic)
+                
+
+                
+                px = 1/rate_t / ((7 - bn)*rate_f_test + bn*rate_r + rate_t)
+                qx = 1/rate_t / ((7 - bn)*rate_f + bn*rate_r + rate_t)
+                self.is_ratio =  px / qx
+
+
+            elif self.current_event[1].startswith("failure"):
+
+                px = (7 - bn)*rate_f_test / ((7 - bn)*rate_f_test + bn*rate_r + rate_t)
+                qx = (7 - bn)*rate_f / ((7 - bn)*rate_f + bn*rate_r + rate_t)
+
+                self.broken_links.append(int(self.current_event[1].split('_')[1]))
+                self.is_ratio = px / qx
+
+            elif self.current_event[1].startswith("recovery"):
+
+                px = bn*rate_r / ((7 - bn)*rate_f_test + bn*rate_r + rate_t)
+                qx = bn*rate_r / ((7 - bn)*rate_f + bn*rate_r + rate_t)
+
+                self.broken_links.remove(int(self.current_event[1].split('_')[1]))
+                self.is_ratio = px / qx
+
+            if self.next_event != None:
+                duration = self.next_event[0] - self.current_event[0]
+            else:
+                duration = self.time_limit - self.current_event[0]
+            print('duration', duration)
         
 
-    def quantize_traffic(self, traffic):
-        traffic = traffic / self.total_traffic
-        return traffic
-
-    
-    def step(self, action, next_traffic = False):
 
         weights = self.action_transform(action)
         self.apply_weights(weights)
-        self.apply_traffic(self.current_traffic)
+        self.apply_traffic_and_duration(self.current_traffic, duration + 1.01)
         self.apply_broken_links()
         self.run_simulation()
 
@@ -214,10 +304,14 @@ class Simulation:
         
         reward = 1*self.delay_reward(delay) + 0.5*self.lossrate_reward(lossrate)
 
-        # update the current traffic if next_traffic is True
-        if next_traffic:
-            self.current_traffic = self.new_traffic
-            self.new_traffic = self.generate_traffic()
+        self.adjust_traffic() # set the remaining traffic matrix
+
+        print('delay', delay)
+        print('lossrate', lossrate)
+        print('broken_links', self.broken_links)
+        print('---------------')
+
+        
 
         return link_traffiics, reward
     
@@ -254,40 +348,43 @@ class Simulation:
                     probability *= (1 - failure_rate)
                     probability_test *= (1 - self.test_failure_rate)
                     continue
+
         self.broken_links = broken_links
         return probability, probability_test
 
 
-    def generate_traffic(self):
-        if self.period:
-            return self.get_periodic_traffic()
-        else:
-            random_vector = np.random.exponential(10, size=(self.num_nodes))
-            traffic = random_vector * random_vector.reshape(-1, 1)
-            traffic = traffic / np.sum(traffic) * self.total_traffic + 1
-            traffic = traffic.reshape(1, -1)
-            return traffic
     
-    def generate_periodic_traffics(self):
+    def generate_traffics(self, traffic_number=10):
         traffics = []
-        # the first traffic is used for state initialization
-        # so we need totally self.period + 1 traffics
-        for i in range(self.period + 1): 
+        
+        traffic_scales = np.abs((np.sin(np.linspace(0, 100*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 100*np.pi, traffic_number + 1))+1))+0.1
+
+        
+        for i in range(traffic_number + 1): 
             random_vector = np.random.exponential(10, size=(self.num_nodes))
+            traffic_size = self.total_traffic * traffic_scales[i]
             traffic = random_vector * random_vector.reshape(-1, 1)
-            traffic = traffic / np.sum(traffic) * self.total_traffic + 1
-            traffic = traffic.reshape(1, -1)
+            traffic = traffic / np.sum(traffic) * traffic_size + 1
             traffics.append(traffic)
+        # from matplotlib import pyplot as plt
+        # plt.plot(traffic_scales)
+        # plt.savefig('traffic_sizes.png')
+        # input()
+        
+        
         return traffics
     
-    def get_periodic_traffic(self):
-        if self.periodic_index % self.period != 0:
-            update_rate = 0.1 + np.random.rand() * 0.2
-            traffic = update_rate * self.periodic_traffics[self.periodic_index % self.period] + (1-update_rate) * self.current_traffic
-        else:
-            traffic = self.periodic_traffics[0]
-        self.periodic_index += 1
+    def get_traffic(self):
+        traffic = self.traffics[self.traffic_index]
+        self.traffic_index += 1
         return traffic
+    def get_event(self):
+        if self.event_index >= len(self.events):
+            return None
+        else:
+            event = self.events[self.event_index]
+            self.event_index += 1
+            return event
 
 
     # lossrate reward functino
@@ -351,6 +448,7 @@ class Simulation:
         os.chdir(configs[self.run_index]['project_path'])
         #print(process.stdout.decode('utf-8'))
 
+
     # analyze qos
     def analyze_qos(self):
         os.chdir(configs[self.run_index]["simulation_path"])
@@ -358,7 +456,7 @@ class Simulation:
         
 
         message = ""
-
+        # create vectors.csv
         cmd = " ".join(["opp_scavetool", "export", "-o", "vectors.csv", "./results/*.vec"])
         process = subprocess.run(cmd, shell=True, capture_output=True)
         # print(f'output: {process.stdout.decode("utf-8")}')
@@ -435,14 +533,10 @@ class Simulation:
                     #print('contribution to link', 2*i+1, outgoing_packets)
                     link_traffics[2*i + index] += outgoing_packets
         link_traffics = np.array(link_traffics)
-        #print('link_traffics', link_traffics)
-        # normalize the link traffics
-        link_traffics = link_traffics / np.sum(link_traffics)
-        #print('link_traffics', link_traffics)
-        #input()
+        #link_traffics = link_traffics / np.sum(link_traffics)
+        link_traffics = link_traffics / 10000
 
         # analyze packet-drop rate
-        #df_total = df.query("name=='incomingPackets:count' & value.notna()")
         df_lost_drop = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
         df_lost_down = df.query("name=='packetDropInterfaceDown:count' & value.notna()")
         df_total = df.query("name=='incomingPackets:count' & value.notna()")
@@ -471,10 +565,31 @@ class Simulation:
         avg_lossrate = np.mean(loss_rates)
 
 
-
         os.chdir(configs[self.run_index]['project_path'])
-        #input()
         return avg_delay, avg_lossrate, link_traffics
+
+    def adjust_traffic(self):
+        os.chdir(configs[self.run_index]["simulation_path"])
+        # analyze received traffic and calculate the remaining traffic matrix
+        df = pd.read_csv("vectors.csv")[['attrname','module', 'name','vecvalue']]
+        df = df.query("name=='packetReceived:vector(packetBytes)' & vecvalue.notna()")
+        data = df.to_dict('records')
+        complete_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
+        for d in data:
+            bytes_received = np.array(d['vecvalue'].split(' '), dtype=np.float32) # end-to-end delays for each sent packets
+            bytes_sum = np.sum(bytes_received) # amount of bytes received
+            module = d['module'] # Network.host4.app[4]
+            source = module.split('.')[1][4:]
+            destination = module.split('.')[2][-2:-1]
+            if int(destination) == 0: 
+                continue
+            complete_traffic[int(source)-1][int(destination)-1] += bytes_sum/1000 # in kB
+        print('current_traffic', self.current_traffic)
+        self.current_traffic = self.current_traffic - complete_traffic + np.ones((self.num_nodes, self.num_nodes), dtype=np.float32)
+        self.current_traffic = np.floor(self.current_traffic)
+        print('remaining_traffic', self.current_traffic)
+        os.chdir(configs[self.run_index]['project_path'])
+        return
 
 
     # applying link weights
@@ -543,7 +658,7 @@ class Simulation:
             f.write(ned_template)
         
 
-    def apply_traffic(self, traffic):
+    def apply_traffic_and_duration(self, traffic, duration):
         ini_path = configs[self.run_index]["simulation_path"] + "/omnetpp.ini"
         ini_template = open(configs[self.run_index]['ini'], 'r').read()
         traffic = traffic.reshape(self.num_nodes, self.num_nodes)
@@ -560,7 +675,10 @@ class Simulation:
                 traffic_string += f'*.host{source+1}.app[{destination+1}].sendBytes = {amount}kB\n'
         tree.write(traffic_path)
         #print('traffic_string', traffic_string)
+
         ini_template = ini_template.replace("<TRAFFIC_PATTERN>", traffic_string)
+        ini_template = ini_template.replace("<TIME_LIMIT>", str(duration))
+
         with open(ini_path, 'w') as f:
             f.write(ini_template)
 
