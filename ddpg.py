@@ -86,27 +86,28 @@ class Actor(nn.Module):
         input_dim: int, 
         out_dim: int,
         init_w: float = 3e-3,
+        layer_size: list = [300, 200],
     ):
         """Initialize."""
         super(Actor, self).__init__()
         
-        self.hidden1 = nn.Linear(input_dim, 300)
-        self.hidden2 = nn.Linear(300, 200)
-        # self.hidden3 = nn.Linear(128, 64)
-        # self.hidden4 = nn.Linear(64, 64)
-        # self.hidden5 = nn.Linear(64, 64)
-        self.out = nn.Linear(200, out_dim)
+        self.layer_size = layer_size
+
+        for i in range(len(layer_size)):
+            if i == 0:
+                setattr(self, f'hidden{i}', nn.Linear(input_dim, layer_size[i]))
+            else:
+                setattr(self, f'hidden{i}', nn.Linear(layer_size[i-1], layer_size[i]))
+        self.out = nn.Linear(layer_size[-1], out_dim)
         
         self.out.weight.data.uniform_(-init_w, init_w)
         self.out.bias.data.uniform_(-init_w, init_w)
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Forward method implementation."""
-        x = F.relu(self.hidden1(state))
-        x = F.relu(self.hidden2(x))
-        # x = F.relu(self.hidden3(x))
-        # x = F.relu(self.hidden4(x))
-        # x = F.relu(self.hidden5(x))
+        x = state
+        for i in range(len(self.layer_size)):
+            x = F.relu(getattr(self, f'hidden{i}')(x))
         action = self.out(x).tanh()
         
         return action
@@ -117,14 +118,18 @@ class Critic(nn.Module):
         self, 
         input_dim: int, 
         init_w: float = 3e-3,
+        layer_size: list = [300, 200],
     ):
         """Initialize."""
         super(Critic, self).__init__()
-        
-        self.hidden1 = nn.Linear(input_dim, 300)
-        self.hidden2 = nn.Linear(300, 200)
-        self.out = nn.Linear(200, 1)
-        
+        self.layer_size = layer_size
+        for i in range(len(layer_size)):
+            if i == 0:
+                setattr(self, f'hidden{i}', nn.Linear(input_dim, layer_size[i]))
+            else:
+                setattr(self, f'hidden{i}', nn.Linear(layer_size[i-1], layer_size[i]))
+
+        self.out = nn.Linear(layer_size[-1], 1)
         self.out.weight.data.uniform_(-init_w, init_w)
         self.out.bias.data.uniform_(-init_w, init_w)
 
@@ -133,9 +138,8 @@ class Critic(nn.Module):
     ) -> torch.Tensor:
         """Forward method implementation."""
         x = torch.cat((state, action), dim=-1)
-        x = F.relu(self.hidden1(x))
-        x = F.relu(self.hidden2(x))
-        #x = F.relu(self.hidden3(x))
+        for i in range(len(self.layer_size)):
+            x = F.relu(getattr(self, f'hidden{i}')(x))
         value = self.out(x)
         
         return value
@@ -174,12 +178,13 @@ class DDPGAgent:
         test_pretrained_critic1: str = "",
         test_pretrained_critic2: str = "",
         run_index: int = 0,
+        layer_size: list = [300, 200],
         
     ):
 
 
         """Initialize."""
-        self.env = Simulation(num_nodes=5, 
+        self.env = Simulation(num_nodes=num_nodes, 
                             total_traffic=total_traffic, 
                             time_limit=time_limit, 
                             run_index=run_index, 
@@ -227,12 +232,12 @@ class DDPGAgent:
 
 
         # networks
-        self.actor = Actor(s_dim, a_dim).to(self.device)
-        self.actor_target = Actor(s_dim, a_dim).to(self.device)
+        self.actor = Actor(s_dim, a_dim, layer_size = layer_size).to(self.device)
+        self.actor_target = Actor(s_dim, a_dim, layer_size = layer_size).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
         
-        self.critic = Critic(s_dim + a_dim).to(self.device)
-        self.critic_target = Critic(s_dim + a_dim).to(self.device)
+        self.critic = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
+        self.critic_target = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         
@@ -287,7 +292,7 @@ class DDPGAgent:
         print('is_ratio', is_ratio)
 
         # synthesize the new state
-        failure_state = np.zeros(7, dtype=float).reshape(1,-1)
+        failure_state = np.zeros(34, dtype=float).reshape(1,-1)
         for index in self.env.broken_links:
             failure_state[0][index] = 1
         next_state = np.concatenate((link_traffics, failure_state), axis=1)
@@ -372,7 +377,7 @@ class DDPGAgent:
     
 
     #@profile(stream=sys.stdout)
-    def train(self, max_steps: int, plotting_interval: int = 30):
+    def train(self, max_steps: int, plotting_interval: int = 100):
         """Train the agent."""
         self.is_test = False
         self.logger = Logger("experiments/" + session_name + "/log.txt")
@@ -706,7 +711,7 @@ class DDPGAgent:
             [515, f"traffic pattern", traffics, CB91_Grey, "traffic", 50],
         ]
         plt.close('all')
-        plt.figure(figsize=(30, 40))
+        plt.figure(figsize=(12, 16))
         for parameters in subplot_params:
             subplot(*parameters)
 
@@ -724,50 +729,54 @@ class DDPGAgent:
 if __name__ == "__main__":
     
     name = names.get_full_name()
-    for actor_lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
-        for critic_lr in [3e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
-            for period in [10, 20, 30, 40, 50, 100, 150]:
-                checkpoint = ""
-                for x in time.localtime()[:6]:
-                    checkpoint += str(x) + "_"
-                session_name = checkpoint + "_newis_" + name
-                session_name = "[4300]test_f=500"
-                os.mkdir(f"./experiments/{session_name}")
-                config = {
-                    "s_dim": 21,
-                    "a_dim": 14,
-                    "buffers_size": 8192,
-                    "sample_size": 64,
-                    "gamma": 1.0,
-                    "eps": 0.995, #0.995 -> 0.9992 six times longer
-                    "initial_random_steps":128 ,#64 -> 1000
-                    "total_traffic": 1000,
-                    "time_limit": 100000,
-                    "horizon": 20,
-                    "num_nodes": 5,
-                    "actor_lr": actor_lr,
-                    "critic_lr": critic_lr,
-                    "session_name": session_name,
-                    "lam_f": 1000,
-                    "lam_r": 20,
-                    "lam_f_test": 1000,
-                    "importance_sampling": False,
-                    "record_uniform": False,
-                    "max_broken_links": 7,
-                    "test_pretrained_actor": "experiments/train_f=500/actor_4800.ckpt",
-                    "test_pretrained_critic1": "experiments/train_f=500/critic_4800.ckpt",
-                    "test_pretrained_critic2": "",#"experiments/001_01_nois/critic_5000.ckpt",
-                    "run_index":3,
-                }
-                s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
-                for e in config.items():
-                    print(e)
 
-                # same_seed(2023)
-                # agent = DDPGAgent(**config)
-                # agent.train(max_steps=20000)
-                same_seed(2024)
-                agent = DDPGAgent(**config)
-                agent.test(max_steps=1000)
-                exit(0)
+    actor_lr = 3e-3 #[1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
+    critic_lr = 3e-3 #[3e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
+
+    checkpoint = ""
+    for x in time.localtime()[:6]:
+        checkpoint += str(x) + "_"
+
+    session_name = checkpoint + "_newis_" + name
+    session_name = "f=5000_l=[800, 600, 200]"
+
+    os.mkdir(f"./experiments/{session_name}")
+    config = {
+        "s_dim": 102, # 34*2 + 34 = 102
+        "a_dim": 68, # 34*2
+        "buffers_size": 8192,
+        "sample_size": 64,
+        "gamma": 1.0,
+        "eps": 0.995, #0.995 -> 0.9992 six times longer
+        "initial_random_steps":64 ,#64 -> 1000
+        "total_traffic": 5000,
+        "time_limit": 1000000,
+        "horizon": 20,
+        "num_nodes": 17,
+        "actor_lr": actor_lr,
+        "critic_lr": critic_lr,
+        "session_name": session_name,
+        "lam_f": 5000,
+        "lam_r": 100,
+        "lam_f_test": 5000,
+        "importance_sampling": False,
+        "record_uniform": False,
+        "max_broken_links": 7,
+        "test_pretrained_actor": "",#"experiments/train_f=500/actor_4800.ckpt",
+        "test_pretrained_critic1": "",#"experiments/train_f=500/critic_4800.ckpt",
+        "test_pretrained_critic2": "",#"experiments/001_01_nois/critic_5000.ckpt",
+        "run_index":4,
+        "layer_size": [800, 600, 200],
+    }
+    s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
+    for e in config.items():
+        print(e)
+
+    same_seed(2023)
+    agent = DDPGAgent(**config)
+    agent.train(max_steps=20000)
+    # same_seed(2024)
+    # agent = DDPGAgent(**config)
+    # agent.test(max_steps=1000)
+    exit(0)
 

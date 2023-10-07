@@ -11,7 +11,7 @@ configs = [
         "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations",
         "ini":'omnetpp_1_tmp.ini',
         "ned":'package_1_tmp.ned',
-        'traffic':'traffic_1.xml',
+        # 'traffic':'traffic_1.xml',
         'routing':'routing_1.xml',
     },
     {
@@ -124,7 +124,7 @@ class Logger:
             f.write(message + '\n')
 
 class Simulation:
-    def __init__(self, num_nodes, total_traffic, time_limit, run_index, lam_f, lam_r, lam_f_test, max_broken_links=7):
+    def __init__(self, num_nodes, total_traffic, time_limit, run_index, lam_f, lam_r, lam_f_test, max_broken_links=34):
         self.omnet_init()
         self.num_nodes = num_nodes
         self.total_traffic = total_traffic
@@ -134,19 +134,49 @@ class Simulation:
         self.max_broken_links=max_broken_links
         self.is_radio = 0
 
-        self.lam_t = 1
+        self.lam_t = 5
         self.lam_f = lam_f
         self.lam_f_test = lam_f_test
         self.lam_r = lam_r
 
+      
+
+        self.large_links = [0,1,2,3,11,12,13,19,20,26]
         self.ports = [
-            ((1,0), (3,0)), 
-            ((1,1), (2,0)),
-            ((2,1), (4,0)),
-            ((3,1), (4,1)),
-            ((3,2), (5,0)),
-            ((4,2), (5,1)),
-            ((2,2), (3,3)),
+            ((1,2), (2, 1)),
+            ((1,3), (3, 1)),
+            ((1,4), (4, 1)),
+            ((1,5), (5, 1)),
+            ((1,6), (6, 1)),
+            ((1,7), (7, 1)),
+            ((1,8), (8, 1)),
+            ((1,9), (9, 1)),
+            ((1,10), (10, 1)),
+            ((1,11), (11, 1)),
+            ((1,12), (12, 1)),
+            ((2,3), (3, 2)),
+            ((2,4), (4, 2)),
+            ((2,5), (5, 2)),
+            ((2,6), (6, 2)),
+            ((2,7), (7, 2)),
+            ((2,8), (8, 2)),
+            ((2,9), (9, 2)),
+            ((2,10), (10, 2)),
+            ((3,4), (4, 3)),
+            ((3,5), (5, 3)),
+            ((3,13), (13, 3)),
+            ((3,14), (14, 3)),
+            ((3,15), (15, 3)),
+            ((3,16), (16, 3)),
+            ((3,17), (17, 3)),
+            ((4,5), (5, 4)),
+            ((4,11), (11, 4)),
+            ((4,12), (12, 4)),
+            ((4,13), (13, 4)),
+            ((4,14), (14, 4)),
+            ((4,15), (15, 4)),
+            ((4,16), (16, 4)),
+            ((4,17), (17, 4)),
         ]
         
 
@@ -180,51 +210,213 @@ class Simulation:
         self.current_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
         
 
-
         self.ethernet = {
+            (1,2): ("10.0.1.2", "eth2"),
+            (1,3): ("10.0.2.3", "eth3"),
+            (1,4): ("10.0.3.4", "eth4"),
+            (1,5): ("10.0.4.5", "eth5"),
+            (1,6): ("10.0.5.6", "eth6"),
+            (1,7): ("10.0.6.7", "eth7"),
+            (1,8): ("10.0.7.8", "eth8"),
+            (1,9): ("10.0.8.9", "eth9"),
+            (1,10): ("10.0.9.10", "eth10"),
+            (1,11): ("10.0.10.11", "eth11"),
+            (1,12): ("10.0.11.12", "eth12"),
 
-            (1,2): ("10.0.2.2", "eth1"),
-            (1,3): ("10.0.1.3", "eth0"),
 
-            (2,3):("10.0.7.3", "eth2"),
-            (2,4):("10.0.3.4", "eth1"),
-            (2,1):("10.0.2.1", "eth0"),
+            (2,1): ("10.0.1.1", "eth1"),
+            (2,3): ("10.0.12.3", "eth3"),
+            (2,4): ("10.0.13.4", "eth4"),
+            (2,5): ("10.0.14.5", "eth5"),
+            (2,6): ("10.0.15.6", "eth6"),
+            (2,7): ("10.0.16.7", "eth7"),
+            (2,8): ("10.0.17.8", "eth8"),
+            (2,9): ("10.0.18.9", "eth9"),
+            (2,10): ("10.0.19.10", "eth10"),
 
-            (3,2):("10.0.7.2", "eth3"),
-            (3,5):("10.0.5.5", "eth2"),
-            (3,4):("10.0.4.4", "eth1"),
-            (3,1):("10.0.1.1", "eth0"),
+
+            (3,1): ("10.0.2.1", "eth1"),
+            (3,2): ("10.0.12.2", "eth2"),
+            (3,4): ("10.0.20.4", "eth4"),
+            (3,5): ("10.0.21.5", "eth5"),
+            (3,13): ("10.0.22.13", "eth13"),
+            (3,14): ("10.0.23.14", "eth14"),
+            (3,15): ("10.0.24.15", "eth15"),
+            (3,16): ("10.0.25.16", "eth16"),
+            (3,17): ("10.0.26.17", "eth17"),
 
 
-            (4,5):("10.0.6.5", "eth2"),
-            (4,3):("10.0.4.3", "eth1"),
-            (4,2):("10.0.3.2", "eth0"),
+            (4,1): ("10.0.3.1", "eth1"),
+            (4,2): ("10.0.13.2", "eth2"),
+            (4,3): ("10.0.20.3", "eth3"),
+            (4,5): ("10.0.27.5", "eth5"),
+            (4,11): ("10.0.28.11", "eth11"),
+            (4,12): ("10.0.29.12", "eth12"),
+            (4,13): ("10.0.30.13", "eth13"),
+            (4,14): ("10.0.31.14", "eth14"),
+            (4,15): ("10.0.32.15", "eth15"),
+            (4,16): ("10.0.33.16", "eth16"),
+            (4,17): ("10.0.34.17", "eth17"),
 
-            (5,4):("10.0.6.4", "eth1"),
-            (5,3):("10.0.5.3", "eth0"),
+
+            (5,1): ("10.0.4.1", "eth1"),
+            (5,2): ("10.0.14.2", "eth2"),
+            (5,3): ("10.0.21.3", "eth3"),
+            (5,4): ("10.0.27.4", "eth4"),
+
+
+            (6,1): ("10.0.5.1", "eth1"),
+            (6,2): ("10.0.15.2", "eth2"),
+
+
+            (7,1): ("10.0.6.1", "eth1"),
+            (7,2): ("10.0.16.2", "eth2"),
+
+
+            (8,1): ("10.0.7.1", "eth1"),
+            (8,2): ("10.0.17.2", "eth2"),
+
+
+            (9,1): ("10.0.8.1", "eth1"),
+            (9,2): ("10.0.18.2", "eth2"),
+
+
+            (10,1): ("10.0.9.1", "eth1"),
+            (10,2): ("10.0.19.2", "eth2"),
+
+
+            (11,1): ("10.0.10.1", "eth1"),
+            (11,4): ("10.0.28.4", "eth4"),
+
+
+            (12,1): ("10.0.11.1", "eth1"),
+            (12,4): ("10.0.29.4", "eth4"),
+
+
+            (13,3): ("10.0.22.3", "eth3"),
+            (13,4): ("10.0.30.4", "eth4"),
+
+
+            (14,3): ("10.0.23.3", "eth3"),
+            (14,4): ("10.0.31.4", "eth4"),
+
+
+            (15,3): ("10.0.24.3", "eth3"),
+            (15,4): ("10.0.32.4", "eth4"),
+
+
+            (16,3): ("10.0.25.3", "eth3"),
+            (16,4): ("10.0.33.4", "eth4"),
+
+
+            (17,3): ("10.0.26.3", "eth3"),
+            (17,4): ("10.0.34.4", "eth4"),
+
         }
 
-        self.edges = [
-                    (1, 3, {"weight": 0, "traffic": 0, "index": "1_1"}),
-                    (3, 1,  {"weight": 0, "traffic": 0, "index": "1_2"}),
+        self.edges = [ # notice that here the index of edges starts from 1
+            (1, 2, {"weight": 0, "traffic": 0, "index": "1_1"}), 
+            (2, 1, {"weight": 0, "traffic": 0, "index": "1_2"}), 
 
-                    (1, 2, {"weight": 0, "traffic": 0, "index": "2_1"}),
-                    (2, 1, {"weight": 0, "traffic": 0, "index": "2_2"}),
+            (1, 3, {"weight": 0, "traffic": 0, "index": "2_1"}), 
+            (3, 1, {"weight": 0, "traffic": 0, "index": "2_2"}), 
 
-                    (2, 4, {"weight": 0, "traffic": 0, "index": "3_1"}),
-                    (4, 2, {"weight": 0, "traffic": 0, "index": "3_2"}),
+            (1, 4, {"weight": 0, "traffic": 0, "index": "3_1"}), 
+            (4, 1, {"weight": 0, "traffic": 0, "index": "3_2"}), 
 
-                    (3, 4, {"weight": 0, "traffic": 0, "index": "4_1"}),
-                    (4, 3, {"weight": 0, "traffic": 0, "index": "4_2"}),
+            (1, 5, {"weight": 0, "traffic": 0, "index": "4_1"}), 
+            (5, 1, {"weight": 0, "traffic": 0, "index": "4_2"}), 
 
-                    (3, 5, {"weight": 0, "traffic": 0, "index": "5_1"}),
-                    (5, 3, {"weight": 0, "traffic": 0, "index": "5_2"}),
+            (1, 6, {"weight": 0, "traffic": 0, "index": "5_1"}), 
+            (6, 1, {"weight": 0, "traffic": 0, "index": "5_2"}), 
 
-                    (4, 5, {"weight": 0, "traffic": 0, "index": "6_1"}),
-                    (5, 4, {"weight": 0, "traffic": 0, "index": "6_2"}),
+            (1, 7, {"weight": 0, "traffic": 0, "index": "6_1"}), 
+            (7, 1, {"weight": 0, "traffic": 0, "index": "6_2"}), 
 
-                    (2, 3, {"weight": 0, "traffic": 0, "index": "7_1"}),
-                    (3, 2, {"weight": 0, "traffic": 0, "index": "7_2"}),
+            (1, 8, {"weight": 0, "traffic": 0, "index": "7_1"}), 
+            (8, 1, {"weight": 0, "traffic": 0, "index": "7_2"}), 
+
+            (1, 9, {"weight": 0, "traffic": 0, "index": "8_1"}), 
+            (9, 1, {"weight": 0, "traffic": 0, "index": "8_2"}), 
+
+            (1, 10, {"weight": 0, "traffic": 0, "index": "9_1"}), 
+            (10, 1, {"weight": 0, "traffic": 0, "index": "9_2"}), 
+
+            (1, 11, {"weight": 0, "traffic": 0, "index": "10_1"}), 
+            (11, 1, {"weight": 0, "traffic": 0, "index": "10_2"}), 
+
+            (1, 12, {"weight": 0, "traffic": 0, "index": "11_1"}), 
+            (12, 1, {"weight": 0, "traffic": 0, "index": "11_2"}), 
+
+            (2, 3, {"weight": 0, "traffic": 0, "index": "12_1"}), 
+            (3, 2, {"weight": 0, "traffic": 0, "index": "12_2"}), 
+
+            (2, 4, {"weight": 0, "traffic": 0, "index": "13_1"}), 
+            (4, 2, {"weight": 0, "traffic": 0, "index": "13_2"}), 
+
+            (2, 5, {"weight": 0, "traffic": 0, "index": "14_1"}), 
+            (5, 2, {"weight": 0, "traffic": 0, "index": "14_2"}), 
+
+            (2, 6, {"weight": 0, "traffic": 0, "index": "15_1"}), 
+            (6, 2, {"weight": 0, "traffic": 0, "index": "15_2"}), 
+
+            (2, 7, {"weight": 0, "traffic": 0, "index": "16_1"}), 
+            (7, 2, {"weight": 0, "traffic": 0, "index": "16_2"}), 
+
+            (2, 8, {"weight": 0, "traffic": 0, "index": "17_1"}), 
+            (8, 2, {"weight": 0, "traffic": 0, "index": "17_2"}), 
+
+            (2, 9, {"weight": 0, "traffic": 0, "index": "18_1"}), 
+            (9, 2, {"weight": 0, "traffic": 0, "index": "18_2"}), 
+
+            (2, 10, {"weight": 0, "traffic": 0, "index": "19_1"}), 
+            (10, 2, {"weight": 0, "traffic": 0, "index": "19_2"}), 
+
+            (3, 4, {"weight": 0, "traffic": 0, "index": "20_1"}), 
+            (4, 3, {"weight": 0, "traffic": 0, "index": "20_2"}), 
+
+            (3, 5, {"weight": 0, "traffic": 0, "index": "21_1"}), 
+            (5, 3, {"weight": 0, "traffic": 0, "index": "21_2"}), 
+
+            (3, 13, {"weight": 0, "traffic": 0, "index": "22_1"}), 
+            (13, 3, {"weight": 0, "traffic": 0, "index": "22_2"}), 
+
+            (3, 14, {"weight": 0, "traffic": 0, "index": "23_1"}), 
+            (14, 3, {"weight": 0, "traffic": 0, "index": "23_2"}), 
+
+            (3, 15, {"weight": 0, "traffic": 0, "index": "24_1"}), 
+            (15, 3, {"weight": 0, "traffic": 0, "index": "24_2"}), 
+
+            (3, 16, {"weight": 0, "traffic": 0, "index": "25_1"}), 
+            (16, 3, {"weight": 0, "traffic": 0, "index": "25_2"}), 
+
+            (3, 17, {"weight": 0, "traffic": 0, "index": "26_1"}), 
+            (17, 3, {"weight": 0, "traffic": 0, "index": "26_2"}), 
+
+            (4, 5, {"weight": 0, "traffic": 0, "index": "27_1"}), 
+            (5, 4, {"weight": 0, "traffic": 0, "index": "27_2"}), 
+
+            (4, 11, {"weight": 0, "traffic": 0, "index": "28_1"}), 
+            (11, 4, {"weight": 0, "traffic": 0, "index": "28_2"}), 
+
+            (4, 12, {"weight": 0, "traffic": 0, "index": "29_1"}), 
+            (12, 4, {"weight": 0, "traffic": 0, "index": "29_2"}), 
+
+            (4, 13, {"weight": 0, "traffic": 0, "index": "30_1"}), 
+            (13, 4, {"weight": 0, "traffic": 0, "index": "30_2"}), 
+
+            (4, 14, {"weight": 0, "traffic": 0, "index": "31_1"}), 
+            (14, 4, {"weight": 0, "traffic": 0, "index": "31_2"}), 
+
+            (4, 15, {"weight": 0, "traffic": 0, "index": "32_1"}), 
+            (15, 4, {"weight": 0, "traffic": 0, "index": "32_2"}), 
+
+            (4, 16, {"weight": 0, "traffic": 0, "index": "33_1"}), 
+            (16, 4, {"weight": 0, "traffic": 0, "index": "33_2"}), 
+
+            (4, 17, {"weight": 0, "traffic": 0, "index": "34_1"}), 
+            (17, 4, {"weight": 0, "traffic": 0, "index": "34_2"}), 
+
         ]
 
         self.G = nx.DiGraph()
@@ -257,30 +449,32 @@ class Simulation:
             rate_r = 1/self.lam_r
             rate_f = 1/self.lam_f
             rate_f_test = 1/self.lam_f_test
-            
+
             if self.current_event[1].startswith("traffic"):
                 self.current_traffic += self.get_traffic()
                 self.current_traffic = np.floor(self.current_traffic)
+                # turn zeros into ones
+                self.current_traffic = self.current_traffic + (self.current_traffic == 0)
                 
 
                 
-                px = 1/rate_t / ((7 - bn)*rate_f_test + bn*rate_r + rate_t)
-                qx = 1/rate_t / ((7 - bn)*rate_f + bn*rate_r + rate_t)
+                px = 1/rate_t / ((34 - bn)*rate_f_test + bn*rate_r + rate_t)
+                qx = 1/rate_t / ((34 - bn)*rate_f + bn*rate_r + rate_t)
                 self.is_ratio =  px / qx
 
 
             elif self.current_event[1].startswith("failure"):
 
-                px = (7 - bn)*rate_f_test / ((7 - bn)*rate_f_test + bn*rate_r + rate_t)
-                qx = (7 - bn)*rate_f / ((7 - bn)*rate_f + bn*rate_r + rate_t)
+                px = (34 - bn)*rate_f_test / ((34 - bn)*rate_f_test + bn*rate_r + rate_t)
+                qx = (34 - bn)*rate_f / ((34 - bn)*rate_f + bn*rate_r + rate_t)
 
                 self.broken_links.append(int(self.current_event[1].split('_')[1]))
                 self.is_ratio = px / qx
 
             elif self.current_event[1].startswith("recovery"):
 
-                px = bn*rate_r / ((7 - bn)*rate_f_test + bn*rate_r + rate_t)
-                qx = bn*rate_r / ((7 - bn)*rate_f + bn*rate_r + rate_t)
+                px = bn*rate_r / ((34 - bn)*rate_f_test + bn*rate_r + rate_t)
+                qx = bn*rate_r / ((34 - bn)*rate_f + bn*rate_r + rate_t)
 
                 self.broken_links.remove(int(self.current_event[1].split('_')[1]))
                 self.is_ratio = px / qx
@@ -357,20 +551,18 @@ class Simulation:
     def generate_traffics(self, traffic_number=10):
         traffics = []
         
-        traffic_scales = np.abs((np.sin(np.linspace(0, 100*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 100*np.pi, traffic_number + 1))+1))+0.1
+        traffic_scales = np.abs((np.sin(np.linspace(0, 200*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 200*np.pi, traffic_number + 1))+1))+0.1
 
         
         for i in range(traffic_number + 1): 
             random_vector = np.random.exponential(10, size=(self.num_nodes))
             traffic_size = self.total_traffic * traffic_scales[i]
             traffic = random_vector * random_vector.reshape(-1, 1)
-            traffic = traffic / np.sum(traffic) * traffic_size + 1
+            traffic = traffic / np.sum(traffic) * traffic_size
             traffics.append(traffic)
-        # from matplotlib import pyplot as plt
-        # plt.plot(traffic_scales)
-        # plt.savefig('traffic_sizes.png')
-        # input()
-        
+        from matplotlib import pyplot as plt
+        plt.plot(traffic_scales)
+        plt.savefig('traffic_sizes.png')
         
         return traffics
     
@@ -576,15 +768,21 @@ class Simulation:
         data = df.to_dict('records')
         complete_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
         for d in data:
-            bytes_received = np.array(d['vecvalue'].split(' '), dtype=np.float32) # end-to-end delays for each sent packets
+            bytes_received = np.array(d['vecvalue'].split(' '), dtype=np.float32) 
             bytes_sum = np.sum(bytes_received) # amount of bytes received
             module = d['module'] # Network.host4.app[4]
+            
             source = module.split('.')[1][4:]
-            destination = module.split('.')[2][-2:-1]
+            destination = module.split('.')[2][4:-1]
+            # print('module', module)
+            # print(source, destination, bytes_sum/1000 - self.current_traffic[int(source)-1][int(destination)-1])
+            # input()
             if int(destination) == 0: 
                 continue
             complete_traffic[int(source)-1][int(destination)-1] += bytes_sum/1000 # in kB
-        print('current_traffic', self.current_traffic)
+        print('current_traffic_sum:', np.sum(self.current_traffic))
+        print('comeplete_traffic_sum:', np.sum(complete_traffic))
+
         self.current_traffic = self.current_traffic - complete_traffic + np.ones((self.num_nodes, self.num_nodes), dtype=np.float32)
         self.current_traffic = np.floor(self.current_traffic)
         print('remaining_traffic', self.current_traffic)
@@ -628,11 +826,26 @@ class Simulation:
     
     def apply_broken_links(self):
         ned_path = configs[self.run_index]["simulation_path"] + "/package.ned"
-        ned_template = open(configs[self.run_index]['ned'], 'r').read()
-        links = {
-            "connected": " <--> Eth10M <--> ",
-            "disconnected": " <--> Eth10M {  disabled = true; } <--> ",
+        ned_template = open(configs[self.run_index]['ned'], 'r').read() # ned file template
+
+
+        # links = {
+        #     "connected": " <--> Eth10M <--> ",
+        #     "disconnected": " <--> Eth10M {  disabled = true; } <--> ",
+        # }
+
+        
+        links1G = {
+            "connected": ' <--> Eth1G { @display("ls=#CE995C,3,s"); } <--> ',
+            "disconnected": " <--> Eth1G {  disabled = true; } <--> ",
         }
+
+        links100M = {
+            "connected": ' <--> Eth100M { @display("ls=#277A5B,2,s"); } <--> ',
+            "disconnected": " <--> Eth100M {  disabled = true; } <--> ",
+        }
+
+
 
         
         
@@ -643,12 +856,16 @@ class Simulation:
 
 
 
-
-
-        for i in range(7):
-            connection_strings.append("        " + port_strings[i][0] + links["connected"] + port_strings[i][1] + ";\n")
+        for i in range(34):
+            if i in self.large_links:
+                connection_strings.append("        " + port_strings[i][0] + links1G["connected"] + port_strings[i][1] + ";\n")
+            else:
+                connection_strings.append("        " + port_strings[i][0] + links100M["connected"] + port_strings[i][1] + ";\n")
         for j in self.broken_links:
-            connection_strings[j] = "        " + port_strings[j][0] + links["disconnected"] + port_strings[j][1] + ";\n"
+            if j in self.large_links:
+                connection_strings[j] = "        " + port_strings[j][0] + links1G["disconnected"] + port_strings[j][1] + ";\n"
+            else:
+                connection_strings[j] = "        " + port_strings[j][0] + links100M["disconnected"] + port_strings[j][1] + ";\n"
 
         connection_string = "".join(connection_strings)
         #print(connection_string)
@@ -661,33 +878,17 @@ class Simulation:
     def apply_traffic_and_duration(self, traffic, duration):
         ini_path = configs[self.run_index]["simulation_path"] + "/omnetpp.ini"
         ini_template = open(configs[self.run_index]['ini'], 'r').read()
-        traffic = traffic.reshape(self.num_nodes, self.num_nodes)
-        traffic_path = configs[self.run_index]['traffic']
-        tree = ET.parse(traffic_path)
-        root = tree.getroot()
-        traffic_string = ""
+        traffic = traffic.reshape(self.num_nodes, self.num_nodes) # traffic  matrix
 
+        traffic_string = ""
         for source in range(self.num_nodes):
             for destination in range(self.num_nodes):
-                node = root.findall(f"./source[@node='{source+1}']/destination[@node='{destination+1}']/[@traffic]")[0]
                 amount = str(int(traffic[source][destination]))
-                node.set("traffic", amount)
                 traffic_string += f'*.host{source+1}.app[{destination+1}].sendBytes = {amount}kB\n'
-        tree.write(traffic_path)
-        #print('traffic_string', traffic_string)
 
         ini_template = ini_template.replace("<TRAFFIC_PATTERN>", traffic_string)
-        ini_template = ini_template.replace("<TIME_LIMIT>", str(duration))
+        ini_template = ini_template.replace("<TIME_LIMIT>", str(duration) + "s")
 
         with open(ini_path, 'w') as f:
             f.write(ini_template)
-
-# if __name__ == "__main__":
-    
-    
-#     # sim = Simulation(num_nodes=5, total_traffic=1000, period=10)
-#     # state = sim.generate_state()
-#     # sim.set_traffic(state)
-#     # sim.step(action=np.random.uniform(-1, 1, size=7).reshape(1, -1))
-
     

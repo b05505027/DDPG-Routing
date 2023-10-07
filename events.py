@@ -46,16 +46,16 @@ def generate_rf_events(link_id, lam_f, lam_r, time_limit) -> list:
     
     return time_seq
 
-events = []
+# events = []
 
-num_of_links = 7
-for i in range(num_of_links):
-    events.extend(generate_rf_events(link_id=i, lam_f=100, lam_r=10, time_limit=500))
+# num_of_links = 7
+# for i in range(num_of_links):
+#     events.extend(generate_rf_events(link_id=i, lam_f=100, lam_r=10, time_limit=500))
 
 
-events.extend(generate_traffic_events(10, 500))
-# sort the events based on the occurrence time
-events.sort(key=lambda x: x[0])
-for e in events:
-    print(e)
+# events.extend(generate_traffic_events(10, 500))
+# # sort the events based on the occurrence time
+# events.sort(key=lambda x: x[0])
+# for e in events:
+#     print(e)
 
