@@ -7,16 +7,16 @@ from events import generate_traffic_events, generate_rf_events
 
 configs = [
     {
-        "project_path": "/Users/liangjialun/Desktop/routing",
-        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations",
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations",
         "ini":'omnetpp_1_tmp.ini',
         "ned":'package_1_tmp.ned',
         # 'traffic':'traffic_1.xml',
         'routing':'routing_1.xml',
     },
     {
-        "project_path": "/Users/liangjialun/Desktop/routing",
-        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations2",
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations2",
         "ini":'omnetpp_2_tmp.ini',
         "ned":'package_2_tmp.ned',
         'traffic':'traffic_2.xml',
@@ -24,36 +24,45 @@ configs = [
 
     },
     {
-        "project_path": "/Users/liangjialun/Desktop/routing",
-        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations3",
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations3",
         "ini":'omnetpp_3_tmp.ini',
         "ned":'package_3_tmp.ned',
         'traffic':'traffic_3.xml',
         'routing':'routing_3.xml',
     },
         {
-        "project_path": "/Users/liangjialun/Desktop/routing",
-        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations4",
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations4",
         "ini":'omnetpp_4_tmp.ini',
         "ned":'package_4_tmp.ned',
         'traffic':'traffic_4.xml',
         'routing':'routing_4.xml',
     },
         {
-        "project_path": "/Users/liangjialun/Desktop/routing",
-        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations5",
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations5",
         "ini":'omnetpp_5_tmp.ini',
         "ned":'package_5_tmp.ned',
         'traffic':'traffic_5.xml',
         'routing':'routing_5.xml',
     },
         {
-        "project_path": "/Users/liangjialun/Desktop/routing",
-        "simulation_path": "/Users/liangjialun/Downloads/samples/drl_routing/simulations6",
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations6",
         "ini":'omnetpp_6_tmp.ini',
         "ned":'package_6_tmp.ned',
         'traffic':'traffic_6.xml',
         'routing':'routing_6.xml',
+    },
+
+    {
+        "project_path": "/home/jialun/routing",
+        "simulation_path": "/home/jialun/samples/drl_routing/simulations7",
+        "ini":'omnetpp_7_tmp.ini',
+        "ned":'package_7_tmp.ned',
+        'traffic':'traffic_7.xml',
+        'routing':'routing_7.xml',
     },
     
 ]
@@ -124,7 +133,7 @@ class Logger:
             f.write(message + '\n')
 
 class Simulation:
-    def __init__(self, num_nodes, total_traffic, time_limit, run_index, lam_f, lam_r, lam_f_test, max_broken_links=34):
+    def __init__(self, num_nodes, total_traffic, time_limit, run_index, lam_f, lam_r, lam_f_test,alpha, is_test,max_broken_links=34):
         self.omnet_init()
         self.num_nodes = num_nodes
         self.total_traffic = total_traffic
@@ -132,12 +141,20 @@ class Simulation:
         self.broken_links = []
         self.run_index = run_index
         self.max_broken_links=max_broken_links
-        self.is_radio = 0
+        self.is_test = is_test
 
         self.lam_t = 5
-        self.lam_f = lam_f
+
+        if is_test:
+            self.lam_f = lam_f_test
+        else:
+            self.lam_f = lam_f
+
         self.lam_f_test = lam_f_test
         self.lam_r = lam_r
+        
+        self.alpha = alpha
+        
 
       
 
@@ -438,7 +455,6 @@ class Simulation:
         return len(self.events)
     def step(self, action, next_event = False):
         if next_event:
-            print("next event")
             self.current_event = self.next_event
             self.next_event = self.get_event()
             if self.current_event == None: # terminate
@@ -483,7 +499,6 @@ class Simulation:
                 duration = self.next_event[0] - self.current_event[0]
             else:
                 duration = self.time_limit - self.current_event[0]
-            print('duration', duration)
         
 
 
@@ -496,18 +511,18 @@ class Simulation:
         delay, lossrate, link_traffiics = self.analyze_qos()
         link_traffiics = link_traffiics.reshape(1, -1)
         
-        reward = 1*self.delay_reward(delay) + 0.5*self.lossrate_reward(lossrate)
+        reward = self.alpha*self.delay_reward(delay) + (1 - self.alpha)*self.lossrate_reward(lossrate)
 
         self.adjust_traffic() # set the remaining traffic matrix
 
-        print('delay', delay)
-        print('lossrate', lossrate)
-        print('broken_links', self.broken_links)
-        print('---------------')
+        # print('delay', delay)
+        # print('lossrate', lossrate)
+        # print('broken_links', self.broken_links)
+        # print('---------------')
 
         
 
-        return link_traffiics, reward
+        return link_traffiics, reward, delay, lossrate
     
 
     def update_links(self, is_test):
@@ -551,7 +566,7 @@ class Simulation:
     def generate_traffics(self, traffic_number=10):
         traffics = []
         
-        traffic_scales = np.abs((np.sin(np.linspace(0, 200*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 200*np.pi, traffic_number + 1))+1))+0.1
+        traffic_scales = np.abs((np.sin(np.linspace(0, 100*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 100*np.pi, traffic_number + 1))+1))+0.1
 
         
         for i in range(traffic_number + 1): 
@@ -581,27 +596,24 @@ class Simulation:
 
     # lossrate reward functino
     def lossrate_reward(self, lossrate):
-        return -5*np.tanh(3*lossrate)
+        return -np.tanh(lossrate - 0.1)
 
     # delay reward function
     def delay_reward(self, delay):
-        return -delay
+        return -np.tanh(delay - 0.3)
 
     def action_transform(self, action: np.ndarray) -> np.ndarray:
         action = action.reshape(-1)
-        action = (action + 1) / 2 * 5 + 1
-        action = action.astype(int)
+        action = action + 0.001
         action = action.tolist()
-        action = list(map(lambda x: x+(x==0), action))
         return action
 
 
     # initialize omnetpp.ini
     def omnet_init(self):
         print('Initializing omnetpp.ini...')
-        print('os.environ[\'PATH\'] = ', os.environ['PATH'])
         # set path to run Fifo simulation in DOS command prompt
-        path1 = "/Users/liangjialun/Downloads/omnetpp-6.0.1/bin" # bin directory
+        path1 = "/home/jialun/omnetpp-6.0/bin" # bin directory
         #path2 = '/'.join(['..','..','..','tools',  g'win64', 'mingw64', 'bin']) # mingw64 directory
         os.environ['PATH'] = ':'.join([path1,os.environ['PATH']]) # add to Path environment variable
 
@@ -614,11 +626,12 @@ class Simulation:
         os.chdir(configs[self.run_index]["simulation_path"])
         process = subprocess.run("pwd", shell=True, capture_output=True)
         #print('pwd:', process.stdout.decode('utf-8'))
+
         
         #cmd = " ".join(["opp_run", "-l" ,"../../inet4.5/src/inet", "-r" , "0", "-m", "-u", "Cmdenv", '-n', ":".join([".","../src","../../inet4.5/src","../../inet4.5/examples","../../inet4.5/tutorials","../../inet4.5/showcases"])])
         # os.system(cmd)
 
-        cmd = " opp_run -r 0 --result-dir='results' -m -u Cmdenv -c General -n .:../src:../../inet4.5/examples:../../inet4.5/showcases:../../inet4.5/src:../../inet4.5/tests/validation:../../inet4.5/tests/networks:../../inet4.5/tutorials -x 'inet.common.selfdoc;inet.linklayer.configurator.gatescheduling.z3;inet.emulation;inet.showcases.visualizer.osg;inet.examples.emulation;inet.showcases.emulation;inet.transportlayer.tcp_lwip;inet.applications.voipstream;inet.visualizer.osg;inet.examples.voipstream' --image-path=../../inet4.5/images -l ../../inet4.5/src/INET omnetpp.ini "
+        cmd = " opp_run -r 0 --result-dir='results' -m -u Cmdenv -c General -n .:../../inet4.5/examples:../../inet4.5/showcases:../../inet4.5/src:../../inet4.5/tests/networks:../../inet4.5/tutorials --image-path=../../inet4.5/images -l ../../inet4.5/src/INET omnetpp.ini "
 
         trial = 5
         while trial > 0:
@@ -667,9 +680,11 @@ class Simulation:
         # print(f'output: {process.stderr}')
 
         # analyze vectors.csv
-        df = pd.read_csv("vectors.csv")[['attrname','module', 'name','vecvalue']]
+        df = pd.read_csv("vectors.csv", low_memory=False)[['attrname','module', 'name','vecvalue']]
         df = df.query("name=='endToEndDelay:vector' & vecvalue.notna()")
         data = df.to_dict('records')
+
+
         app_delays = []
         for d in data:
             delays = np.array(d['vecvalue'].split(' '), dtype=float) # end-to-end delays for each sent packets
@@ -699,14 +714,14 @@ class Simulation:
         '''['run', 'type', 'module', 'name', 'attrname', 'attrvalue', 'value',
        'count', 'sumweights', 'mean', 'stddev', 'min', 'max', 'underflows',
        'overflows', 'binedges', 'binvalues']'''
-        df = pd.read_csv("scalars.csv")[['module', 'name','value']]
-
+        df = pd.read_csv("scalars.csv", low_memory=False)[['module', 'name','value']]
 
         # analyze the traffic on each link
         df_outgoing = df.query("name=='outgoingPackets:count' & value.notna()")
         data_outgoing = df_outgoing.to_dict('records')
 
         link_traffics = [0] * len(self.ports) * 2
+
         for data in data_outgoing:
             outgoing_packets = int(data['value'])
             module = data['module']
@@ -726,7 +741,7 @@ class Simulation:
                     link_traffics[2*i + index] += outgoing_packets
         link_traffics = np.array(link_traffics)
         #link_traffics = link_traffics / np.sum(link_traffics)
-        link_traffics = link_traffics / 10000
+        link_traffics = link_traffics / 100000
 
         # analyze packet-drop rate
         df_lost_drop = df.query("name=='droppedPacketsQueueOverflow:count' & value.notna()")
@@ -763,7 +778,7 @@ class Simulation:
     def adjust_traffic(self):
         os.chdir(configs[self.run_index]["simulation_path"])
         # analyze received traffic and calculate the remaining traffic matrix
-        df = pd.read_csv("vectors.csv")[['attrname','module', 'name','vecvalue']]
+        df = pd.read_csv("vectors.csv", low_memory=False)[['attrname','module', 'name','vecvalue']]
         df = df.query("name=='packetReceived:vector(packetBytes)' & vecvalue.notna()")
         data = df.to_dict('records')
         complete_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
@@ -780,12 +795,12 @@ class Simulation:
             if int(destination) == 0: 
                 continue
             complete_traffic[int(source)-1][int(destination)-1] += bytes_sum/1000 # in kB
-        print('current_traffic_sum:', np.sum(self.current_traffic))
-        print('comeplete_traffic_sum:', np.sum(complete_traffic))
+        # print('current_traffic_sum:', np.sum(self.current_traffic))
+        # print('comeplete_traffic_sum:', np.sum(complete_traffic))
 
         self.current_traffic = self.current_traffic - complete_traffic + np.ones((self.num_nodes, self.num_nodes), dtype=np.float32)
         self.current_traffic = np.floor(self.current_traffic)
-        print('remaining_traffic', self.current_traffic)
+        # print('remaining_traffic', self.current_traffic)
         os.chdir(configs[self.run_index]['project_path'])
         return
 
@@ -798,7 +813,7 @@ class Simulation:
             edge[2]['weight'] = link_weights[index]
 
         #print('now the edge data is', [x[2]['weight'] for x in self.G.edges.data()])
-        #input()
+        #input()c
 
         # calculate the shortest paths
         shortest_paths = nx.shortest_path(self.G,  weight="weight")
@@ -806,15 +821,21 @@ class Simulation:
 
         routing_string = ""
 
+        # count the hops
+        #hops = np.zeros([self.num_nodes+1, self.num_nodes+1])
+
         for source in range(self.num_nodes):
+            current_hops = 0
             source = source + 1
             paths = shortest_paths[source] # the shortest paths from source to all other reachable nodes
             for destination in paths.keys():
                 if source != destination:
+                    #hops[source][destination] = len(paths[destination])
                     next_hop = paths[destination][1]
                     gateway, interface = self.ethernet[(source, next_hop)]
                     routing_string += f'	<route hosts="node{source}" destination="192.168.{destination}.0" netmask="255.255.255.0" gateway="{gateway}" interface="{interface}"/>\n'
-
+        
+        # print('maxhops',np.max(hops))
 
 
         routing_path = configs[self.run_index]["simulation_path"] + "/routing.xml"

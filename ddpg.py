@@ -3,7 +3,7 @@ import numpy as np
 import random
 import sys
 from typing import Dict, Tuple, List
-from utils import Simulation, Logger, get_state_distribution
+from utils import Simulation, Logger, get_state_distribution, configs
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -33,7 +33,7 @@ def same_seed(seed):
 class ReplayBuffer:
     """A simple numpy replay buffer."""
 
-    def __init__(self, s_dim: int, a_dim: int, max_size: int, sample_size: int = 32):
+    def __init__(self, s_dim: int, a_dim: int, max_size: int, batch_size: int = 32):
         
         """Initializate."""
         self.s_buffer = np.zeros([max_size, s_dim], dtype=np.float32)
@@ -42,7 +42,7 @@ class ReplayBuffer:
         self.r_buffer = np.zeros([max_size], dtype=np.float32)
         self.done_buffer = np.zeros([max_size], dtype=np.float32)
         self.is_buffer = np.zeros([max_size], dtype=np.float32)
-        self.max_size, self.sample_size = max_size, sample_size
+        self.max_size, self.batch_size = max_size, batch_size
         self.ptr, self.size, = 0, 0
 
     def store(
@@ -66,7 +66,7 @@ class ReplayBuffer:
 
     def sample_batch(self) -> Dict[str, np.ndarray]:
         """Randomly sample a batch of experiences from memory."""
-        idxs = np.random.choice(self.size, size=self.sample_size, replace=False)
+        idxs = np.random.choice(self.size, size=self.batch_size, replace=False)
         return dict(s=self.s_buffer[idxs],
                     next_s=self.next_s_buffer[idxs],
                     a=self.a_buffer[idxs],
@@ -108,7 +108,7 @@ class Actor(nn.Module):
         x = state
         for i in range(len(self.layer_size)):
             x = F.relu(getattr(self, f'hidden{i}')(x))
-        action = self.out(x).tanh()
+        action = torch.sigmoid(self.out(x))
         
         return action
     
@@ -151,34 +151,34 @@ class DDPGAgent:
 
     def __init__(
         self,
-        s_dim: int,
-        a_dim: int,
-        buffers_size: int,
-        sample_size: int,
+        s_dim: int = 102,
+        a_dim: int = 68,
+        buffers_size: int = 8192,
+        batch_size: int = 64,
         gamma: float = 0.99,
-        eps: float = 0.95,
+        eps: float = 0.995,
         tau: float = 0.005,
-        initial_random_steps: int = 1e4,
-        total_traffic: int = 1000,
-        time_limit: int = 100,
-        horizon: int = 10,
-        num_nodes: int = 5,
-        actor_lr: float = 3e-4,
-        critic_lr: float = 1e-3,
-        l2_reg: float = 1e-6,
+        initial_random_steps: int = 64,
+        total_traffic: int = 2000,
+        time_limit: int = 2000000,
+        horizon: int = 20,
+        num_nodes: int = 17,
+        actor_lr: float = 5e-3,
+        critic_lr: float = 5e-3,
         session_name: str = "example",
-        lam_f: float = 200,
-        lam_r: float = 20,
-        lam_f_test: float = 1000,
-        ministeps: int = 3,
+        training_lam_f: float = 1000,
+        testing_lam_f: float = 5000,
+        lam_r: float = 100,
         importance_sampling: bool = True,
         record_uniform: bool = False,
-        max_broken_links: int = 0,
+        max_broken_links: int = 7,
         test_pretrained_actor: str = "",
-        test_pretrained_critic1: str = "",
-        test_pretrained_critic2: str = "",
-        run_index: int = 0,
+        test_pretrained_critic: str = "",
+        run_index: int = 1,
         layer_size: list = [300, 200],
+        is_ospf: bool = False,
+        alpha: float=0.1,
+        is_test: bool=False,
         
     ):
 
@@ -188,15 +188,17 @@ class DDPGAgent:
                             total_traffic=total_traffic, 
                             time_limit=time_limit, 
                             run_index=run_index, 
-                            lam_f = lam_f, 
+                            lam_f = training_lam_f, 
                             lam_r = lam_r,
-                            lam_f_test = lam_f_test,
-                            max_broken_links=max_broken_links,)
+                            lam_f_test = testing_lam_f,
+                            max_broken_links=max_broken_links,
+                            alpha=alpha,
+                            is_test=is_test)
 
         self.a_dim = a_dim
         self.s_dim = s_dim
-        self.buffer = ReplayBuffer(s_dim =s_dim, a_dim=a_dim, max_size=buffers_size, sample_size=sample_size)
-        self.sample_size = sample_size
+        self.buffer = ReplayBuffer(s_dim =s_dim, a_dim=a_dim, max_size=buffers_size, batch_size=batch_size)
+        self.batch_size = batch_size
         self.gamma = gamma
         self.eps = eps
         self.tau = tau
@@ -206,70 +208,68 @@ class DDPGAgent:
         self.critic_lr = critic_lr
         self.session_name = session_name
         self.horizon = horizon
-
+        self.layer_size = layer_size
+        self.timestep = 0
+        
 
 
 
        
 
 
-        self.ministeps = ministeps
         self.importance_sampling = importance_sampling
         self.record_uniform = record_uniform
         self.test_pretrained_actor = test_pretrained_actor
-        self.test_pretrained_critic1 = test_pretrained_critic1
-        self.test_pretrained_critic2 = test_pretrained_critic2
+        self.test_pretrained_critic = test_pretrained_critic
 
         
         self.run_index = run_index
-        
+        # mode: train / test
+        self.is_test = is_test
+        # mode: test pretrained / test ospf
+        self.is_ospf = is_ospf
 
         
         
         # device: cpu / gpu
-        #self.device = "cpu"
-        self.device = "mps"
+        self.device = "cpu"
+        # self.device = "mps"
 
 
-        # networks
-        self.actor = Actor(s_dim, a_dim, layer_size = layer_size).to(self.device)
-        self.actor_target = Actor(s_dim, a_dim, layer_size = layer_size).to(self.device)
-        self.actor_target.load_state_dict(self.actor.state_dict())
-        
-        self.critic = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
-        self.critic_target = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
-        self.critic_target.load_state_dict(self.critic.state_dict())
+        if not self.is_ospf:
+            # networks
+            self.actor = Actor(s_dim, a_dim, layer_size = layer_size).to(self.device)
+            self.actor_target = Actor(s_dim, a_dim, layer_size = layer_size).to(self.device)
+            self.actor_target.load_state_dict(self.actor.state_dict())
+            
+            self.critic = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
+            self.critic_target = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
+            self.critic_target.load_state_dict(self.critic.state_dict())
 
-        
-
-        # optimizer
-        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=self.actor_lr)
-        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=self.critic_lr)
+        if not self.test:
+            # optimizer
+            self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=self.actor_lr)
+            self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=self.critic_lr)
         
         # transition to store in memory
         self.transition = list()
-        
         # total steps count
         self.total_step = 0
-
-        # mode: train / test
-        self.is_test = False
-
         self.initial_random_steps = initial_random_steps
     
     
     def select_action(self, state: np.ndarray, exploration_rate: float, store_transition: float) -> np.ndarray:
         # take random actions in the beginning
         if self.total_step < self.initial_random_steps and not self.is_test:
-            selected_action = np.random.uniform(-1, 1, size=self.a_dim).reshape(1, -1)
+            selected_action = np.random.uniform(0, 1, size=self.a_dim).reshape(1, -1)
         else:
             selected_action = self.actor(torch.FloatTensor(state).to(self.device)).detach().cpu().numpy()
         
         # adding noise
         if not self.is_test:
             # using the beta distribution as noise
-            noise = exploration_rate*(np.random.beta(0.5, 0.5, size=self.a_dim) - 0.5).reshape(1, -1)
-            selected_action = np.clip(selected_action + noise, -1.0, 1.0)
+            noise = exploration_rate*(np.random.beta(0.5, 0.5, size=self.a_dim)).reshape(1, -1)
+            selected_action = np.clip(selected_action + noise, 0, 1.0)
         
         if store_transition:
             self.transition = [state.reshape(-1), selected_action.reshape(-1)] # (s, a,)
@@ -283,13 +283,17 @@ class DDPGAgent:
         qos  = self.env.step(action, next_event=next_event)
         if qos==None:
             return None
-        link_traffics, reward = qos
+        link_traffics, reward, delay, lossrate = qos
         
         if self.importance_sampling:
             is_ratio = self.env.is_ratio
         else:
             is_ratio = 1.0
-        print('is_ratio', is_ratio)
+
+        if self.is_test:
+            self.pbar.set_description(f"timestep: {self.timestep}/{self.horizon} delay: {delay:.4f}, lossrate:{lossrate:.4f}, num_broken_links:{len(self.env.broken_links)}  ")
+        else:
+            self.pbar.set_description(f"timestep: {self.timestep}/{self.horizon} is_ratio: {is_ratio}, delay: {delay:.4f}, lossrate:{lossrate:.4f}, num_broken_links:{len(self.env.broken_links)  }")
 
         # synthesize the new state
         failure_state = np.zeros(34, dtype=float).reshape(1,-1)
@@ -302,7 +306,7 @@ class DDPGAgent:
             self.transition += [reward, next_state.reshape(-1), is_ratio, is_done] # (s, a, r, s', is_ratio, done)
             self.buffer.store(*self.transition)
 
-        return next_state, reward
+        return next_state, reward, delay, lossrate
 
 
 
@@ -376,42 +380,32 @@ class DDPGAgent:
         return actor_loss.data.cpu(), critic_loss.data.cpu()
     
 
-    #@profile(stream=sys.stdout)
-    def train(self, max_steps: int, plotting_interval: int = 100):
+    def train(self, plotting_interval: int = 1):
+
         """Train the agent."""
         self.is_test = False
-        self.logger = Logger("experiments/" + session_name + "/log.txt")
+        self.logger = Logger("experiments/" + self.session_name + "/log.txt")
         
-        if self.test_pretrained_actor:
-            self.actor.load_state_dict(torch.load(self.test_pretrained_actor))
-            self.actor_target.load_state_dict(self.actor.state_dict())
-            self.actor = self.actor.to(self.device)
-            self.actor_target = self.actor_target.to(self.device)
-            self.critic.load_state_dict(torch.load(self.test_pretrained_actor.replace("actor", "critic")))
-            self.critic_target.load_state_dict(self.critic.state_dict())
-            self.critic = self.critic.to(self.device)
-            self.critic_target = self.critic_target.to(self.device)
-        else:
-            print("No pretrained model is loaded!!!")
         # initialization
         actor_losses = []
         critic_losses = []
         scores = []
-        scores_uniform = []
         exploration_rates = []
         link_failure_times = []
         traffics  = []
+        delays = []
+        lossrates = []
 
         # get the event size
-        events_size = self.env.get_event_size()
-        print('event_size', events_size)
+        event_size = self.env.get_event_size()
+        self.pbar = tqdm(range(1, event_size//self.horizon + 2))
 
         # initialize the state
         state = None
-        next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_event=True, is_done=False, store_transition=False)
-        
+        next_state, _, _, _= self.step(np.zeros(self.a_dim, dtype=float), next_event=True, is_done=False, store_transition=False)
+
         # start interacting with the environment
-        for self.total_step in tqdm(range(1, events_size//self.horizon + 2)):
+        for self.total_step in self.pbar:
             
             # calculate current exploration rate
             exploration_rate = np.power(self.eps, self.total_step)
@@ -421,20 +415,21 @@ class DDPGAgent:
             score = 0
             score_uniform = 0
             
-            for timestep in range(1, self.horizon + 1):
-                self.logger.write("==================== episode {} timestep {}/{} ====================".format(self.total_step, timestep,events_size))
+            
+            for self.timestep in range(1, self.horizon + 1):
+                self.logger.write("==================== episode {} timestep {}/{} ====================".format(self.total_step, self.timestep,event_size))
                 # check if it's the last step
-                done = False if timestep <  self.horizon else True
+                done = False if self.timestep <  self.horizon else True
                 
                 # get and store the new action (s, a)
                 state = next_state
                 action = self.select_action(state, exploration_rate, store_transition=True)
 
                 # get and store the new state(r, s'), plus, update link conditions in the environment
-                next_state, reward = self.step(action,next_event=True, is_done=done, store_transition=True)
+                next_state, reward, delay, lossrate = self.step(action,next_event=True, is_done=done, store_transition=True)
 
                 # update the score (G)
-                score  = reward + score
+                score  = reward + self.gamma * score
             
                 # logging (s, a, r, s')
                 self.logger.write(f'current state {str(state.reshape(-1)):<20}') # (s, )
@@ -450,17 +445,25 @@ class DDPGAgent:
                 # if the episode ends
                 if done:
                     scores.append(score)
+                
+                delays.append(delay)
+                lossrates.append(lossrate)
 
                 traffics.append(self.env.current_traffic.sum())
 
             # if training is ready
-            if (
-                len(self.buffer) >= self.sample_size 
-                and self.total_step > self.initial_random_steps
-            ):
+            if (len(self.buffer) >= self.batch_size and 
+                self.total_step > self.initial_random_steps):
                 actor_loss, critic_loss = self.update_model()
                 actor_losses.append(actor_loss)
                 critic_losses.append(critic_loss)
+            
+            
+            # dump values
+            json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
+            json.dump(delays,open(f"./experiments/{self.session_name}/delays.json", "w"))
+            json.dump(lossrates,open(f"./experiments/{self.session_name}/lossrates.json", "w"))
+
                 
             
             # plotting
@@ -468,7 +471,6 @@ class DDPGAgent:
                 self._plot(
                     frame_idx = self.total_step, 
                     scores = scores, 
-                    scores_uniform = scores_uniform,
                     actor_losses = actor_losses, 
                     critic_losses = critic_losses,
                     exploration_rates = exploration_rates,
@@ -476,6 +478,7 @@ class DDPGAgent:
                 )
 
             if self.total_step % 100 == 0:
+                print(f'model_saved epoch={self.total_step}')
                 torch.save(self.actor.state_dict(), f"./experiments/{self.session_name}/actor_{self.total_step}.ckpt")
                 torch.save(self.critic.state_dict(), f"./experiments/{self.session_name}/critic_{self.total_step}.ckpt")
                 
@@ -497,103 +500,72 @@ class DDPGAgent:
             t_param.data.copy_(tau * l_param.data + (1.0 - tau) * t_param.data)
     
 
-    def test(self, max_steps: int):
+    def test(self):
 
         
         """ load the pretrained model """
-        self.logger = Logger("experiments/" + session_name + "/log_test.txt")
-        is_random = False
+        self.logger = Logger("experiments/" + self.session_name + "/log_test.txt")
 
-
-        if self.test_pretrained_actor == "random":
-            is_random = True
-        else:
-            self.actor.load_state_dict(torch.load(self.test_pretrained_actor))
+        if not self.is_ospf:
+            try:
+                self.actor.load_state_dict(torch.load(self.test_pretrained_actor))
+                self.critic.load_state_dict(torch.load(self.test_pretrained_critic))
+            except Exception as e:
+                print('Error occurs while loading pretrained models')
+                print(e)
+                exit(0)
             self.actor = self.actor.to(self.device)
-
-        if self.test_pretrained_critic1:
-            self.critic.load_state_dict(torch.load(self.test_pretrained_critic1))
             self.critic = self.critic.to(self.device)
-            print('critic1 loaded')
-            print(self.test_pretrained_critic1)
-            for name, param in self.critic.named_parameters():
-                if name == 'out.weight':
-                   print(name, param)
-        
-
-        if self.test_pretrained_critic2:
-            self.critic2 = Critic(self.s_dim + self.a_dim).to(self.device)
-            self.critic2.load_state_dict(torch.load(self.test_pretrained_critic2))
-            self.critic2 = self.critic2.to(self.device)
-            print('critic2 loaded')
-            print(self.test_pretrained_critic2)
-            for name, param in self.critic2.named_parameters():
-                if name == 'out.weight':
-                   print(name, param)
-        else:
-            self.critic2 = None
 
 
         """Test the agent."""
         self.logger.write(f"Testing environment... total_traffic: {self.total_traffic}")
-     
-        
-        self.is_test = True
         self.total_step = 0
         
         # initialization
         scores = []
         rewards = []
-        q_values1 = []
-        q_values2 = []
         traffics  = []
-
-        # get the event size
-        events_size = self.env.get_event_size()
-        events_size = events_size // 20
-        print('event_size', events_size)
+        self.pbar = tqdm(range(1, 1001))
 
         # initialize the state
         state = None
-        next_state, _ = self.step(np.ones(self.a_dim, dtype=float),next_event=True, is_done=False, store_transition=False)
-        
+        next_state, _, _, _, = self.step(np.ones(self.a_dim, dtype=float),next_event=True, is_done=False, store_transition=False)
         
         with torch.no_grad():
          # the testing loop starts here...
-             for self.total_step in tqdm(range(1, events_size//self.horizon + 2)):
+             for self.total_step in self.pbar:
                 
                 # in the begging of each episode, reset the score
                 score = 0
 
-                for timestep in range(1, self.horizon + 1):
-                    self.logger.write("==================== episode {} timestep {}/{} ====================".format(self.total_step, timestep,events_size))
+                for self.timestep in range(1, self.horizon + 1):
+                    self.logger.write("==================== episode {} self.timestep {}/{} ====================".format(self.total_step,self.timestep, self.horizon))
                     
                     # check if it's the last step
-                    done = False if timestep <  self.horizon else True
+                    done = False if self.timestep < self.horizon else True
 
                     # get and store the new action (s, a)
                     state = next_state
-                    action = self.select_action(state, 0, store_transition=False)
+
+                    # is it a test for ospf?
+                    if self.is_ospf:
+                        action = np.array([0.1,0.1, 0.1,0.1, 0.1,0.1, 0.1,0.1, 1,1, 1,1, 1,1, 1,1, 1,1, 1,1, 1,1, 
+                        0.1,0.1, 0.1,0.1, 0.1,0.1, 1,1, 1,1, 1,1, 1,1, 1,1,
+                        0.1,0.1, 0.1,0.1, 1,1, 1,1, 1,1, 1,1, 1,1,
+                        0.1,0.1, 1,1, 1,1, 1,1, 1,1, 1,1, 1,1, 1,1]).reshape(1, -1)
+                    else:
+                        action = self.select_action(state, 0, store_transition=False)
 
                     # get and store the new state(r, s'), plus, update link conditions in the environment
-                    next_state, reward = self.step(action,next_event=True, is_done=done, store_transition=False)
+                    next_state, reward, delay, lossrate = self.step(action,next_event=True, is_done=done, store_transition=False)
 
                     # update the score (G)
-                    score  = reward + score
-                    print('score', score)
+                    score  = reward + self.gamma * score
 
                     # record rewards and q values
                     rewards.append(reward)
 
-                    # warning: if there's any shape error, check here first
-                    if self.critic:
-                        q_values1.append(self.critic(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())   
-                    if self.critic2:
-                        q_values2.append(self.critic2(torch.FloatTensor(state).to(self.device), torch.FloatTensor(action).to(self.device)).cpu().numpy().item())         
-                    
-                    # update the score (G)
-                    # score  = reward + self.gamma * score
-                    
  
                     # logging (s, a, r, s')
                     self.logger.write(f'current state {str(state.reshape(-1)):<20}') # (s, )
@@ -619,39 +591,44 @@ class DDPGAgent:
                         frame_idx = self.total_step, 
                         scores = scores, 
                         rewards = rewards,
-                        q_values1 = q_values1,
-                        q_values2 = q_values2,
                         traffics = traffics,
                 )
         # the testing loop ends here
 
-
-
-    #@profile(stream=sys.stdout)
     def _plot(
         self, 
         frame_idx: int, 
         scores: List[float] = [],
-        scores_uniform: List[float] = [], 
         actor_losses: List[float] = [], 
         critic_losses: List[float] = [], 
         exploration_rates: List[float] = [],
-        rewards: List[float]= [],
-        q_values1: List[float]= [],
-        q_values2: List[float]= [],
-        traffics: List[float]= [],
+        rewards: List[float] = [],
+        traffics: List[float] = []
     ):
-        """ Colors for plotting """
-        CB91_Blue = '#2CBDFE'
-        CB91_Green = '#47DBCD'
-        CB91_Pink = '#F3A0F2'
-        CB91_Purple = '#9D2EC5'
-        CB91_Violet = '#661D98'
-        CB91_Amber = '#F5B14C'
-        CB91_Grey = '#BDBDBD'
-        
+    
+        # Define plot colors
+        Blue='#2CBDFE'
+        Green='#47DBCD'
+        Pink='#F3A0F2'
+        Purple='#9D2EC5'
+        Violet='#661D98'
+        Amber='#F5B14C'
+        Grey='#BDBDBD'
 
-        """Plot the training progresses."""
+        def create_subplot_params():
+            if self.test:
+                first_title = self.test_pretrained_actor
+            else:
+                first_title = "DDPG"
+            subplot_params = [
+                [411, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, Blue, first_title, 50],
+                [412, "actor_loss", actor_losses, Pink, None, 20],
+                [413, "critic_loss", critic_losses, Purple,None, 20],
+                [414, f"traffic pattern", traffics, Grey, "traffic", 50],
+            ]
+            return subplot_params
+            
+
         def subplot(loc: int, title: str, values: List[float], color: str, legend: str, smoothing: int):
             if len(values) == 0:
                 return
@@ -661,122 +638,183 @@ class DDPGAgent:
             plt.plot(np.ones(len(values)) * np.mean(values), "--", color=color)
             if legend:
                 plt.legend()
-     
-        """ Preprocess q values """
-        if rewards:
-            ''' Group rewards every 10 items, 
-                and change the ith value in the group into 
-                the sum over the ith to 15th value in the group.'''
-            true_q_values = []
-            for i in range(0, len(rewards), 10):
-                true_q_values.extend([sum(rewards[i+j:i+10]) for j in range(10)])
-        else:
-            true_q_values = []
+            
 
-        if q_values1:
-            q_values1 = (np.array(q_values1)).tolist()
-        if q_values2:
-            q_values2 = (np.array(q_values2)).tolist()
-        
-        """ check for validity """
-        if len(q_values1) > 0 and len(true_q_values) > 0:
-            assert len(true_q_values) == len(q_values1)
-        if len(q_values2) > 0 and len(true_q_values) > 0:
-            assert len(true_q_values) == len(q_values2)
+        def plot_subplots(subplot_params):
+            plt.close('all')
+            plt.figure(figsize=(12, 16))
+            for parameters in subplot_params:
+                subplot(*parameters)
+            # additional plot for exploration rate
+            if not self.is_test:
+                plt.subplot(411)
+                plt.twinx().plot(exploration_rates, "--", color='#F2BFC8')
+
+        # Main plotting logic
+        subplot_params = create_subplot_params()
+        plot_subplots(subplot_params)
+
+        # Save plot
+        plot_filename = f"./experiments/{self.session_name}/plot{'_test' if self.is_test else ''}.png"
+        plt.savefig(plot_filename)
+        plt.clf()
 
 
-        """ dump raw values"""
-        if self.is_test:
-            json.dump(scores, open(f"./experiments/{self.session_name}/scores_test.json", "w"))
-            json.dump(true_q_values, open(f"./experiments/{self.session_name}/true_q_values_test.json", "w"))
-            json.dump(q_values1, open(f"./experiments/{self.session_name}/q_values1_test.json", "w"))
-            json.dump(q_values2, open(f"./experiments/{self.session_name}/q_values2_test.json", "w"))
-            json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform_test.json", "w"))
-        else:
-            json.dump(scores, open(f"./experiments/{self.session_name}/scores.json", "w"))
-            json.dump(scores_uniform, open(f"./experiments/{self.session_name}/scores_uniform.json", "w"))
 
-        if self.is_test:
-            first_title = self.test_pretrained_actor
-        else:
-            first_title = "DDPG"
-        subplot_params = [
-            [511, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores, CB91_Blue, first_title, 50],
-            [511, f"frame {frame_idx}. score: {np.mean(scores[-10:])}", scores_uniform, CB91_Green, "uniform", 50],
-            [512, "actor_loss", actor_losses, CB91_Pink, None, 20],
-            [513, "critic_loss", critic_losses, CB91_Purple,None, 20],
-            [514, f"predicted and true Q values", true_q_values, CB91_Violet, "true_q_value", 50],
-            [514, f"predicted and true Q values", q_values1, CB91_Amber, "predicted_q_values_1", 50],
-            [514, f"predicted and true Q values", q_values2, "yellowgreen", "predicted_q_values_2", 50],
-            [515, f"traffic pattern", traffics, CB91_Grey, "traffic", 50],
-        ]
-        plt.close('all')
-        plt.figure(figsize=(12, 16))
-        for parameters in subplot_params:
-            subplot(*parameters)
+def train_agent(training_f: int, 
+    importance_sampling: bool=False, 
+    name_prefix: str=""):
 
-        # additional plot for exploration rate
-        if not self.is_test:
-            plt.subplot(511)
-            plt.twinx().plot(exploration_rates, "--", color='#F2BFC8')
 
-        if self.is_test:
-            plt.savefig(f"./experiments/{self.session_name}/plot_test.png")
-        else:
-            plt.savefig(f"./experiments/{self.session_name}/plot.png")
-        plt.clf() 
 
-if __name__ == "__main__":
-    
-    name = names.get_full_name()
+    session_name = f"f={training_f}"
+    if importance_sampling:
+        session_name += "_IS"
+    if name_prefix:
+        session_name = name_prefix + "_" + session_name
 
-    actor_lr = 3e-3 #[1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
-    critic_lr = 3e-3 #[3e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
+    # check if the running index is already used
+    # by checking if the file routing_index.xml is being modified
+    found_index = False
 
-    checkpoint = ""
-    for x in time.localtime()[:6]:
-        checkpoint += str(x) + "_"
+    for run_index in range(7):
+        try:
+            ned_path = configs[run_index]["simulation_path"] + "/package.ned"
+            if time.time() - os.path.getmtime(ned_path) > 60:
+                found_index = True
+                break
+        except FileNotFoundError:
+            print(f"The file {file_path} does not exist.")
+            exit(0)
 
-    session_name = checkpoint + "_newis_" + name
-    session_name = "f=5000_l=[800, 600, 200]"
+    if not found_index:
+        print("All running indices are used. Please try again later.")
+        exit(0)
+    else:
+        print(f"Running index {run_index} is available.")
+        print(f"Assigning running index {run_index} to this experiment.")
 
-    os.mkdir(f"./experiments/{session_name}")
     config = {
-        "s_dim": 102, # 34*2 + 34 = 102
-        "a_dim": 68, # 34*2
-        "buffers_size": 8192,
-        "sample_size": 64,
-        "gamma": 1.0,
-        "eps": 0.995, #0.995 -> 0.9992 six times longer
-        "initial_random_steps":64 ,#64 -> 1000
-        "total_traffic": 5000,
-        "time_limit": 1000000,
-        "horizon": 20,
-        "num_nodes": 17,
-        "actor_lr": actor_lr,
-        "critic_lr": critic_lr,
+        # Experiment
         "session_name": session_name,
-        "lam_f": 5000,
-        "lam_r": 100,
-        "lam_f_test": 5000,
-        "importance_sampling": False,
-        "record_uniform": False,
-        "max_broken_links": 7,
-        "test_pretrained_actor": "",#"experiments/train_f=500/actor_4800.ckpt",
-        "test_pretrained_critic1": "",#"experiments/train_f=500/critic_4800.ckpt",
-        "test_pretrained_critic2": "",#"experiments/001_01_nois/critic_5000.ckpt",
-        "run_index":4,
-        "layer_size": [800, 600, 200],
-    }
-    s = json.dump(config, open(f"./experiments/{session_name}/config.json", "w"), indent=4)
-    for e in config.items():
-        print(e)
+        "run_index": run_index,
 
+        # Environment
+        "total_traffic": 3000,
+        "training_lam_f": training_f,
+        "testing_lam_f": 5000,
+        "alpha": 0.1,
+
+        # MDP
+        "horizon": 20,
+        "gamma": 0.8,
+        "importance_sampling": importance_sampling,
+
+        # Replay Buffer
+        "buffers_size": 8192,
+        "batch_size": 256,
+
+        # Training
+        "layer_size": [800, 600, 200],
+        "initial_random_steps":64,
+    }
+
+    
+    os.mkdir(f"./experiments/{session_name}")
+    with open(f"./experiments/{session_name}/config.json", "w") as file:
+        json.dump(config, file, indent=4)
+
+    print(f'start_training:{session_name}')
     same_seed(2023)
     agent = DDPGAgent(**config)
-    agent.train(max_steps=20000)
-    # same_seed(2024)
-    # agent = DDPGAgent(**config)
-    # agent.test(max_steps=1000)
-    exit(0)
+    agent.train()
+
+
+
+def test_agent(session_name: str=None,
+    epoch: int=0,
+    ospf: bool=False,
+    name_prefix:str=""):
+
+    # check if the running index is already used
+    # by checking if the file routing_index.xml is being modified
+    found_index = False
+
+    for run_index in range(7):
+        try:
+            ned_path = configs[run_index]["simulation_path"] + "/package.ned"
+            if time.time() - os.path.getmtime(ned_path) > 60:
+                found_index = True
+                break
+        except FileNotFoundError:
+            print(f"The file {file_path} does not exist.")
+            exit(0)
+
+    if not found_index:
+        print("All running indices are used. Please try again later.")
+        exit(0)
+    else:
+        print(f"Running index {run_index} is available.")
+        print(f"Assigning running index {run_index} to this experiment.")
+
+    if ospf:
+        if name_prefix:
+            test_session_name = f"{name_prefix}_test_ospf"
+        else:
+            test_session_name = f"test_ospf"
+
+    else:
+        if name_prefix:
+            test_session_name = f"{name_prefix}_test_epoch={epoch}_{session_name}"
+        else:
+            test_session_name = f"test_epoch={epoch}_{session_name}"
+    os.mkdir(f"./experiments/{test_session_name}")
+
+    config = {
+        # Experiment
+        "session_name": test_session_name,
+        "run_index": run_index,
+
+        # Environment
+        "total_traffic": 3000,
+        "testing_lam_f": 5000,
+        "alpha": 0.1,
+
+        # MDP
+        "horizon": 20,
+        "gamma": 0.8,
+
+        # testings
+        "is_ospf": ospf,
+        "is_test": True
+    }
+
+    if not ospf:
+        expdir = 'experiments' + '/' + session_name
+        config_dir = expdir + '/' + 'config.json'
+        with open(config_dir, 'r') as file:
+            layer_size = json.load(file)['layer_size']
+        config['layer_size'] = layer_size
+        config['test_pretrained_actor'] = f'{expdir}/actor_{epoch}.ckpt'
+        config['test_pretrained_critic'] = f'{expdir}/critic_{epoch}.ckpt'
+
+    with open(f"./experiments/{test_session_name}/config.json", "w") as file:
+        json.dump(config, file, indent=4)
+    
+
+    print(f'start_testing:{test_session_name}')
+    same_seed(4096)
+    agent = DDPGAgent(**config)
+    agent.test()
+
+
+
+
+if __name__ == "__main__":
+
+    #train_agent(training_f=1000, importance_sampling=False, name_prefix="Queue=50")
+    #train_agent(training_f=1323, importance_sampling=False, name_prefix="new_settingq")
+    #test_agent(session_name="f=1323", epoch=200, name_prefix='for_test')
+    test_agent(ospf=True, name_prefix="Queue=50")
+    
 
