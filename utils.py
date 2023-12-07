@@ -4,68 +4,31 @@ import pandas as pd
 import numpy as np
 import networkx as nx 
 from events import generate_traffic_events, generate_rf_events
+import os
 
-configs = [
-    {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations",
-        "ini":'omnetpp_1_tmp.ini',
-        "ned":'package_1_tmp.ned',
-        # 'traffic':'traffic_1.xml',
-        'routing':'routing_1.xml',
-    },
-    {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations2",
-        "ini":'omnetpp_2_tmp.ini',
-        "ned":'package_2_tmp.ned',
-        'traffic':'traffic_2.xml',
-        'routing':'routing_2.xml',
+import os
 
-    },
-    {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations3",
-        "ini":'omnetpp_3_tmp.ini',
-        "ned":'package_3_tmp.ned',
-        'traffic':'traffic_3.xml',
-        'routing':'routing_3.xml',
-    },
-        {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations4",
-        "ini":'omnetpp_4_tmp.ini',
-        "ned":'package_4_tmp.ned',
-        'traffic':'traffic_4.xml',
-        'routing':'routing_4.xml',
-    },
-        {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations5",
-        "ini":'omnetpp_5_tmp.ini',
-        "ned":'package_5_tmp.ned',
-        'traffic':'traffic_5.xml',
-        'routing':'routing_5.xml',
-    },
-        {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations6",
-        "ini":'omnetpp_6_tmp.ini',
-        "ned":'package_6_tmp.ned',
-        'traffic':'traffic_6.xml',
-        'routing':'routing_6.xml',
-    },
+def create_file_paths(directory, sub_directory, file_template):
+    # Creates a list of file paths using a specified directory, sub-directory, and a naming template.
+    # It uses os.path.join to ensure compatibility across different operating systems.
+    return [os.path.join(directory, sub_directory, file_template.format(i)) for i in SIMULATION_RANGE]
 
-    {
-        "project_path": "/home/jialun/routing",
-        "simulation_path": "/home/jialun/samples/drl_routing/simulations7",
-        "ini":'omnetpp_7_tmp.ini',
-        "ned":'package_7_tmp.ned',
-        'traffic':'traffic_7.xml',
-        'routing':'routing_7.xml',
-    },
-    
-]
+# Specifies the network topology for the project.
+TOPOLOGY = "TANET"
+
+# The base path for the OMNET++ project.
+PROJECT_PATH = "/home/jialun/routing"
+
+# Arange of indices to be used for simulations.
+SIMULATION_RANGE = range(1, 11)
+
+# Paths for OMNET++ simulation directories.
+OMNET_SIMULATION_PATHS = [os.path.join(PROJECT_PATH, "samples", "drl_routing", "simulations" + str(i)) for i in SIMULATION_RANGE]
+
+# Lists of paths for various configuration files (INI, NED, and routing).
+INI_FILES = create_file_paths(TOPOLOGY, "ini_files", "omnetpp_{}_tmp.ini")
+NED_FILES = create_file_paths(TOPOLOGY, "ned_files", "package_{}_tmp.ned")
+ROUTING_FILES = create_file_paths(TOPOLOGY, "routing_files", "routing_{}_tmp.ini")
 
 
 def binary_states(n_bits):
@@ -630,7 +593,7 @@ class Simulation:
     def run_simulation(self):
         # cmd = "../../../bin/opp_run.exe -r 0 -m -u Cmdenv -c traffic100 -n .;../src omnetpp.ini"                                                                
         # cmd = " ".join(["opp_run",  "-r" , "0", "-m", "-u", "Cmdenv", "-c", "traffic100", '-n', '.;..\\src;..\\..\\inet\\src;..\\..\\inet\\examples;..\\..\\inet\\tutorials;..\\..\\inet\\showcases'])
-        os.chdir(configs[self.run_index]["simulation_path"])
+        os.chdir(OMNET_SIMULATION_PATHS[self.run_index])
         process = subprocess.run("pwd", shell=True, capture_output=True)
         #print('pwd:', process.stdout.decode('utf-8'))
 
@@ -657,13 +620,13 @@ class Simulation:
         if trial == 0:
             print('Simulation failed')
             exit(1)
-        os.chdir(configs[self.run_index]['project_path'])
+        os.chdir(PROJECT_PATH)
         #print(process.stdout.decode('utf-8'))
 
 
     # analyze qos
     def analyze_qos(self):
-        os.chdir(configs[self.run_index]["simulation_path"])
+        os.chdir(OMNET_SIMULATION_PATHS[self.run_index])
         # create vectors.csv
         
 
@@ -779,11 +742,11 @@ class Simulation:
         avg_lossrate = np.mean(loss_rates)
 
 
-        os.chdir(configs[self.run_index]['project_path'])
+        os.chdir(PROJECT_PATH)
         return avg_delay, avg_lossrate, link_traffics
 
     def adjust_traffic(self):
-        os.chdir(configs[self.run_index]["simulation_path"])
+        os.chdir(OMNET_SIMULATION_PATHS[self.run_index])
         # analyze received traffic and calculate the remaining traffic matrix
         df = pd.read_csv("vectors.csv", low_memory=False)[['attrname','module', 'name','vecvalue']]
         df = df.query("name=='packetReceived:vector(packetBytes)' & vecvalue.notna()")
@@ -808,7 +771,7 @@ class Simulation:
         self.current_traffic = self.current_traffic - complete_traffic + np.ones((self.num_nodes, self.num_nodes), dtype=np.float32)
         self.current_traffic = np.floor(self.current_traffic)
         # print('remaining_traffic', self.current_traffic)
-        os.chdir(configs[self.run_index]['project_path'])
+        os.chdir(PROJECT_PATH)
         return
 
 
@@ -845,16 +808,16 @@ class Simulation:
         # print('maxhops',np.max(hops))
 
 
-        routing_path = configs[self.run_index]["simulation_path"] + "/routing.xml"
-        routing_template = open(configs[self.run_index]['routing'], 'r').read()
+        routing_path = os.path.join(OMNET_SIMULATION_PATHS[self.run_index], "routing.xml")
+        routing_template = open(ROUTING_FILES[self.run_index], 'r').read()
         routing_template = routing_template.replace("<SHORTEST_PATH_ROUTING_CONFIG>", routing_string)
         with open(routing_path, 'w') as f:
             f.write(routing_template)
 
     
     def apply_broken_links(self):
-        ned_path = configs[self.run_index]["simulation_path"] + "/package.ned"
-        ned_template = open(configs[self.run_index]['ned'], 'r').read() # ned file template
+        ned_path = os.path.join(OMNET_SIMULATION_PATHS[self.run_index], "/package.ned")
+        ned_template = open(NED_FILES[self.run_index], 'r').read() # ned file template
 
 
         # links = {
@@ -904,8 +867,8 @@ class Simulation:
         
 
     def apply_traffic_and_duration(self, traffic, duration):
-        ini_path = configs[self.run_index]["simulation_path"] + "/omnetpp.ini"
-        ini_template = open(configs[self.run_index]['ini'], 'r').read()
+        ini_path = os.path.join(OMNET_SIMULATION_PATHS[self.run_index], "/omnetpp.ini")
+        ini_template = open(INI_FILES[self.run_index], 'r').read()
         traffic = traffic.reshape(self.num_nodes, self.num_nodes) # traffic  matrix
 
         traffic_string = ""

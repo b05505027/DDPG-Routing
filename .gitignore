@@ -7,3 +7,4 @@ __pycache__/
 ddpg_avis_2.py
 ddpg_avis.py
 test_avis.py
+network.py
