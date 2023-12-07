@@ -246,7 +246,7 @@ class DDPGAgent:
             self.critic_target = Critic(s_dim + a_dim, layer_size = layer_size).to(self.device)
             self.critic_target.load_state_dict(self.critic.state_dict())
 
-        if not self.test:
+        if not self.is_test:
             # optimizer
             self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=self.actor_lr)
             self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=self.critic_lr)
@@ -812,9 +812,14 @@ def test_agent(session_name: str=None,
 
 if __name__ == "__main__":
 
-    #train_agent(training_f=1000, importance_sampling=False, name_prefix="Queue=50")
+    train_agent(training_f=1000, importance_sampling=False, name_prefix="Queue=50")
+    #train_agent(training_f=1000, importance_sampling=True, name_prefix="Queue=50")
+    #train_agent(training_f=250, importance_sampling=False, name_prefix="Queue=50")
+    #train_agent(training_f=250, importance_sampling=True, name_prefix="Queue=50")
+    #train_agent(training_f=5000, importance_sampling=False, name_prefix="Queue=50")
+
     #train_agent(training_f=1323, importance_sampling=False, name_prefix="new_settingq")
     #test_agent(session_name="f=1323", epoch=200, name_prefix='for_test')
-    test_agent(ospf=True, name_prefix="Queue=50")
+    #test_agent(ospf=True, name_prefix="Queue=50")
     
 

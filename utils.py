@@ -225,7 +225,7 @@ class Simulation:
         self.traffics = self.generate_traffics(traffic_number=self.traffic_number)
         self.traffic_index = 0
         self.current_traffic = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
-        
+    
 
         self.ethernet = {
             (1,2): ("10.0.1.2", "eth2"),
@@ -566,9 +566,15 @@ class Simulation:
     def generate_traffics(self, traffic_number=10):
         traffics = []
         
-        traffic_scales = np.abs((np.sin(np.linspace(0, 100*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 100*np.pi, traffic_number + 1))+1))+0.1
+        # traffic_scales = np.abs((np.sin(np.linspace(0, 100*np.pi, traffic_number + 1)))*(np.sin(10*np.linspace(0, 100*np.pi, traffic_number + 1))+1))+0.1
 
-        
+        # Generating the uniform traffic pattern with Gaussian noise again
+        uniform_traffic = np.ones(traffic_number + 1) * 0.5  # Constant traffic at 0.5
+        gaussian_noise = np.random.normal(0, 0.1, traffic_number + 1)  # Gaussian noise
+        uniform_traffic_with_noise = uniform_traffic + gaussian_noise  # Combined pattern
+        traffic_scales = uniform_traffic_with_noise
+
+
         for i in range(traffic_number + 1): 
             random_vector = np.random.exponential(10, size=(self.num_nodes))
             traffic_size = self.total_traffic * traffic_scales[i]
@@ -577,7 +583,7 @@ class Simulation:
             traffics.append(traffic)
         from matplotlib import pyplot as plt
         plt.plot(traffic_scales)
-        plt.savefig('traffic_sizes.png')
+        plt.savefig('traffic_sizes1.png')
         
         return traffics
     
@@ -606,6 +612,7 @@ class Simulation:
         action = action.reshape(-1)
         action = action + 0.001
         action = action.tolist()
+        
         return action
 
 
