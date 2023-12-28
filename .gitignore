@@ -4,7 +4,7 @@ __pycache__/
 .DS_Store
 *.png
 *.txt
-ddpg_avis_2.py
-ddpg_avis.py
-test_avis.py
-network.py
+resource.py
+test.py
+*.sh
+topology
